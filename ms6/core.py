@@ -69,13 +69,13 @@ DEFAULT_S_EXP = 3
 DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
 
 # NOTE: vs6 (the verifier) now lives in its own module, vs6.py, paired with
-# verifier_utils6.py -- a self-contained package with zero import
+# vs6/utils6.py -- a self-contained package with zero import
 # dependency on this file or utils6.py, so a party that only ever verifies
 # proofs never has to load prover-only code (SystemRandom-based salt
 # generation, _column_perm's generation, col_digit_counts,
 # cell_pow_product_mod, eval_level_mod, seal_row_mod). vs6.DEFAULT_MOD /
 # vs6.VS6_MOD must stay numerically equal to this file's DEFAULT_MOD --
-# see vs6.py's and verifier_utils6.py's own DEFAULT_MOD comments.
+# see vs6/core.py's and vs6/utils6.py's own DEFAULT_MOD comments.
 
 
 

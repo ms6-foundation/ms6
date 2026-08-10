@@ -1,12 +1,12 @@
 """vs6: the verifier side of ms6/ps6/vs6, split into its own module (paired
-with verifier_utils6.py) so a party that only ever verifies proofs -- e.g.
+with vs6/utils6.py) so a party that only ever verifies proofs -- e.g.
 the bank in zk_sanctions_screening_scale_demo.py -- can import/audit a
 self-contained package with zero code paths that could generate a secret
 salt, fabricate a proof, or touch prover-only machinery.
 
 This module has NO import dependency on ms6.py or utils6.py: chunk_of/
 chunks/_permute_row/_seal_batch/_get_batch_ids are small enough that they're
-duplicated here rather than shared, so this file plus verifier_utils6.py
+duplicated here rather than shared, so this file plus vs6/utils6.py
 form a complete, independent verifier package -- deploy/install/audit just
 these two files to verify proofs, without ever pulling in ms6.py's
 SystemRandom-based salt generation or utils6.py's prover-only combinatorics
@@ -16,7 +16,7 @@ If either the shared functions here or their ms6.py counterparts change,
 the other copy must be updated to match -- there is no automated check
 enforcing that; a regression test comparing the two files' outputs
 bit-for-bit would be a reasonable follow-up if this split is kept
-long-term (see verifier_utils6.py's own docstring for the same caveat on
+long-term (see vs6/utils6.py's own docstring for the same caveat on
 the Utils-method side).
 
 vs6's full trust domain, after this split: chunk_of/chunks/_permute_row
@@ -24,7 +24,7 @@ vs6's full trust domain, after this split: chunk_of/chunks/_permute_row
 contribution from the claims themselves, not trusted from the prover),
 _seal_batch (the same batch-fold ms6 uses, re-run independently here to
 recompute the same value from h_list and check it against c), _vs6_batch,
-vs6, and verifier_utils6.Utils's hash/mul_combinations_mod/vsum_level(_mod)/
+vs6, and vs6.utils6.Utils's hash/mul_combinations_mod/vsum_level(_mod)/
 cell_product(_mod)/backward_chunk/Acc. Everything ms6.py/utils6.py
 additionally contain is unreachable from here.
 
@@ -35,8 +35,8 @@ script (there's no module-top-level multiprocessing call here), but a
 top-level code with `if __name__ == "__main__":` for correctness on macOS/
 Windows (spawn start method) -- see ms6.py's and the demo files' own notes.
 """
-from . import verifier_utils6 as u
-from .verifier_utils6 import _s
+from . import utils6 as u
+from .utils6 import _s
 
 DEFAULT_CHUNK_SIZE = 40
 DEFAULT_BATCH_SIZE = 1000
@@ -48,7 +48,7 @@ DEFAULT_WORKERS = 1
 DEFAULT_SEAL_BATCH_SIZE = 1000
 
 # Must stay numerically identical to utils6.DEFAULT_MOD / ms6.DEFAULT_MOD --
-# sourced from verifier_utils6's own copy (see that module's DEFAULT_MOD
+# sourced from vs6/utils6's own copy (see that module's DEFAULT_MOD
 # comment for provenance) rather than duplicated a fourth time here.
 DEFAULT_MOD = u.DEFAULT_MOD
 
@@ -260,7 +260,7 @@ def _vs6_batch(ps, vals, x, chunk_size, d, workers=DEFAULT_WORKERS, mod=DEFAULT_
 
     # mul_combinations_mod (combinatorial pairing, paired with ps6's
     # eval_level_mod) only leaks a handful of edge columns rather than every
-    # column -- see verifier_utils6.Utils.mul_combinations_mod's docstring.
+    # column -- see vs6.utils6.Utils.mul_combinations_mod's docstring.
     #
     # NOTE: mul_combinations_mod's signature is (N, ps, vals, mod) -- 4
     # positional args, q already folded into `ps`/`M` upstream (ps6's own

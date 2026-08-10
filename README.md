@@ -18,9 +18,21 @@ ms6/                       prover
   utils6.py                  arithmetic toolkit
 vs6/                       verifier — imports nothing from ms6/
   core.py                    vs6() verify
-  verifier_utils6.py         the subset of the toolkit a verifier needs
+  utils6.py                  the subset of the toolkit a verifier needs
+tests/                     49 checks; exits non-zero on failure
+  run_all.py                 runs every module, one combined report
+  harness.py                 shared fixtures + the pass/fail reporter
+  test_roundtrip.py          commit -> open -> verify, and tamper rejection
+  test_updatability.py       append / replace / delete
+  test_sealtree.py           the cached fold tree
+  test_params.py             the parameter contract and its enforcement
+  test_parity.py             prover/verifier duplicated-copy parity
+  test_modulus.py            modulus sizing + legacy backward compatibility
+  test_sizing.py             x-sizing determinism, parallel construction
+  test_completeness.py       sweep over the workers>1 batch-routing path
+  test_adversarial.py        tamper / forge / equivocation attempts
+  bench.py                   update cost (informational, never fails)
 examples/
-  selftest.py                32 checks; exits non-zero on failure
   payroll_audit_demo.py      HR proves salaries to an auditor
   sanctions_screening_scale_demo.py   120k-record registry, bank checks 2
 ms6_vibe.md                development log — why each decision is what it is
@@ -131,15 +143,24 @@ Honest limitations, since this is a prototype:
 `ms6_vibe.md` records what each mechanism defends against and what it does not,
 including several attempts that were tried and reverted.
 
-## Self-test
+## Tests
 
 ```
-python3 examples/selftest.py
+python3 -m tests                 # everything, one combined report
+python3 -m tests.test_parity     # one group on its own
 ```
 
-32 checks covering updatability (append/replace/delete), the parameter
-contract and its enforcement, and prover/verifier copy parity. Exits non-zero
-on failure, so it works as a CI smoke test.
+49 checks covering the round trip, updatability (append/replace/delete), the
+cached fold tree, the parameter contract and its enforcement, modulus sizing
+and backward compatibility, prover/verifier copy parity, a sweep over the
+parallel batch-routing path, and an adversarial suite (tampered values,
+wrong-index substitution, fabricated values, cross-batch swaps, iset/proof
+mismatch, and hm equivocation at both claimed and unclaimed positions). Exits non-zero on
+failure with the failing checks named, so it works as a CI gate.
+
+The parity module is the one worth keeping: it compares the duplicated prover
+and verifier copies output-for-output, and is the only check that catches
+drift in code no proof path happens to exercise.
 
 ## License
 

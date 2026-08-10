@@ -1287,6 +1287,98 @@ hitting.
 
 ---
 
+## 36. Project hygiene: README, LICENSE, `.gitignore`
+
+**Requests** — *please readme file to the ms6 project and also add license
+file* / *please add gitignore to ignore any .ipynb file* / *please also delete
+the orig_backup* / *Please add year to the copyright*
+
+- **`README.md`** rewritten from the stub into a project README: what the
+  scheme does, layout, a three-phase quickstart, the `Commitment` update API,
+  the `params` contract, why the two packages are separate, and a **Security**
+  section stating the limitations plainly — the known leak, the probabilistic
+  `h == c` check, no formal proof, and that `hash()` is not a standard
+  cryptographic hash. A prototype README that omitted those would mislead.
+- **`LICENSE`** — MIT. The license and the copyright holder are a legal
+  declaration, not a default to guess, so both were asked rather than
+  assumed: `Copyright (c) 2026 Ayaz Mumtaz`.
+- **`.gitignore`** — `*.ipynb` as asked, plus the standard Python/OS entries;
+  a gitignore that let `__pycache__` through would have needed a second pass
+  immediately. Note the directory is not a git repo yet, so the file is
+  preparatory.
+- **`.orig_backup/`** (the pre-split copies from entry 35) deleted after the
+  full suite and both demos were re-verified without it. Stale duplicates
+  beside the real files are the exact drift hazard this codebase keeps
+  hitting.
+
+The project root was also renamed `ds16/` → **`ms6/`**, so Part F's heading
+now names a directory that no longer exists — left as-is, since it was
+accurate when written.
+
+## 37. `vs6/verifier_utils6.py` → `vs6/utils6.py`
+
+**Request** — *please rename verifier_utils6.py utils6.py*
+
+The `verifier_` prefix only existed because both toolkits used to sit in one
+flat directory. Inside `vs6/` it is redundant, and `vs6/utils6.py` now mirrors
+`ms6/utils6.py`. 17 live references updated across five files.
+
+Two spots needed judgement rather than find/replace:
+
+- **The module's own docstring became self-contradictory** — "a deliberately
+  reduced subset of utils6.py … rather than imported from utils6.py" is now
+  the file describing itself. 12 self-references disambiguated to
+  `ms6/utils6.py`, `ms6.utils6.Utils`, and so on.
+- **The parity check label** would have read `"utils6 <-> utils6"`. Now
+  `"ms6.utils6 <-> vs6.utils6"`.
+
+Historical entries in this log were left naming the old file: they record what
+things were called at the time.
+
+## 38. A `tests` package
+
+**Requests** — *please create a tests package and include files under tests
+folder* / *please run and include test_adversarial.py to the run_all.py*
+
+`examples/selftest.py` (459 lines, one function) became a package. Check logic
+was **split, not rewritten** — the same bodies, then confirmed the same labels
+still pass.
+
+```
+tests/  __init__.py __main__.py   python3 -m tests
+        run_all.py                combined report, names every failure
+        harness.py                shared fixtures + Checker
+        test_roundtrip / _updatability / _params / _sealtree / _parity
+        test_modulus / _sizing / _completeness / _adversarial
+        bench.py                  informational timing
+```
+
+Each module runs standalone or composes into one report. **49 checks.**
+
+**Two of the modules arrived broken, in the same way.** Both
+`test_completeness.py` and `test_adversarial.py` ran their whole sweep at
+module level with `workers>1`. Under spawn every child re-imports the module,
+so the sweep re-ran inside each child, spawning recursively until the pool
+died (`BrokenProcessPool`). Exactly the failure `vs6/core.py`'s own PLATFORM
+NOTE warns about. Both wrapped in `run()` behind a `__main__` guard.
+
+**The adversarial suite could not fail.** Its `expect_pass`/`expect_reject`
+printed `FAIL (forged proof ACCEPTED!)` and then returned normally — wired
+into `run_all` as-is, a genuine forgery would have been printed and the run
+would still have exited 0. Coverage that reads as real but cannot gate CI is
+worse than none. Results now go through the shared `check`. Verified rather
+than assumed: sabotaging `vs6.core` to accept every proof (`assert True`)
+gives **exit 1 with 10 failures**, four of them adversarial; before the fix
+that run would have been green.
+
+Smaller calls: the update-cost benchmark moved out of the parity module into
+`bench.py`, since a timing should not be able to fail a gate; and
+`test_roundtrip` previously reported zero checks because it asserted rather
+than reporting — it now reports, and also verifies a tampered claim is
+rejected, since "it verified" means nothing without that.
+
+---
+
 # Open items
 
 - **The root-extraction leak itself (entry 23) is still open at the
@@ -1299,9 +1391,10 @@ hitting.
 - **`ms6_eprint.tex` needs a sync pass** for entry 29's `DEFAULT_MOD` resize
   (2048 → 256 bits) — the paper's parameter table and Remark 3.1 still cite
   the old value.
-- **`ds16/` and `ps4work/` have diverged.** Part F (entries 34–35) is in
-  `ds16/` only: the package split, the demo fixes, and `README.md`.
-  Conversely `ps4work/` holds `ms6_eprint.tex`, which `ds16/` does not. The
+- **`ms6/` (formerly `ds16/`) and `ps4work/` have diverged.** Part F
+  (entries 34–38) is in `ms6/` only: the package split, the demo fixes, the
+  `vs6/utils6.py` rename, the `tests` package, and README/LICENSE/.gitignore.
+  Conversely `ps4work/` holds `ms6_eprint.tex`, which `ms6/` does not. The
   stale demo copies found in entry 35 are what surfaced this. Pick one tree
   as authoritative before the next change, or the duplicated-copy problem
   moves up a level from files to trees.
