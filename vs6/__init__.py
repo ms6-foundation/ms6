@@ -2,7 +2,7 @@
 
     vs6(c, claims, ps_list, x_list, perm_list, params, expect=None) -> True
 
-Self-contained: this package and verifier_utils6 import NOTHING from the
+Self-contained: this package and its utils6 import NOTHING from the
 prover package. A party that only ever verifies proofs can install and audit
 just this directory, without ever loading code that could generate a secret
 salt or fabricate a proof.
@@ -22,10 +22,10 @@ from .core import (
     DEFAULT_CHUNK_SIZE, DEFAULT_BATCH_SIZE, DEFAULT_WORKERS,
     DEFAULT_SEAL_BATCH_SIZE, DEFAULT_MOD,
 )
-from . import verifier_utils6
+from . import utils6
 
 __all__ = [
     "vs6", "interlace_mod", "unpack_params", "PARAM_KEYS", "ParamMismatch",
     "DEFAULT_CHUNK_SIZE", "DEFAULT_BATCH_SIZE", "DEFAULT_WORKERS",
-    "DEFAULT_SEAL_BATCH_SIZE", "DEFAULT_MOD", "verifier_utils6",
+    "DEFAULT_SEAL_BATCH_SIZE", "DEFAULT_MOD", "utils6",
 ]

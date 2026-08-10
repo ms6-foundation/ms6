@@ -1,26 +1,27 @@
-"""Minimal, self-contained arithmetic toolkit for vs6.py (the verifier side
-of ms6/ps6/vs6). This is a deliberately reduced subset of utils6.py: it
+"""Minimal, self-contained arithmetic toolkit for vs6/core.py (the verifier
+side of ms6/ps6/vs6). A deliberately reduced subset of the prover's
+ms6/utils6.py: it
 contains ONLY the primitives vs6's own call graph actually touches --
 hash, mul_combinations_mod and its full dependency chain
 (vsum_level_fold_mod -> fold_h_vector_mod -> h_vector_mod,
 convolve_h_vectors_mod), vsum_level/vsum_level_mod, cell_product/
 cell_product_mod, backward_chunk, and the Acc class -- duplicated here
-rather than imported from utils6.py, so this module plus vs6.py form a
+rather than imported from ms6/utils6.py, so this module plus vs6/core.py form a
 complete, independent package with zero import-time dependency on the
-prover's code (ms6.py, utils6.py).
+prover's code (ms6/core.py, ms6/utils6.py).
 
 Deliberately EXCLUDED (prover-only, never reached from vs6's call graph):
 col_digit_counts, cell_pow_product(_mod), seal_row_mod, eval_level(_mod),
 eval_level_rec_mod, mul_combinations (non-mod)/mul_combinations_rec_mod,
-hash_sha256/hash_poseidon (unused prototypes), and everything in ms6.py
+hash_sha256/hash_poseidon (unused prototypes), and everything in ms6/core.py
 that generates or handles the secret salt (SystemRandom, _column_perm's
 generation -- vs6 only ever *receives* a perm, never derives one).
 
 Rationale: a party deploying only the verifier (e.g. a bank checking a
 sanctions-registry proof, see zk_sanctions_screening_scale_demo.py) can
-install/audit just this module + vs6.py, without ever loading code that
+install/audit just this module + vs6/core.py, without ever loading code that
 could fabricate proofs or handle prover secrets -- a much smaller surface
-than the full ms6.py + utils6.py the prover needs. Whenever utils6.py's
+than the full ms6/ package the prover needs. Whenever ms6/utils6.py's
 verifier-relevant methods change, this file must be updated to match --
 there is no automated check enforcing that; a regression test comparing
 the two files' outputs bit-for-bit would be a reasonable follow-up if
@@ -62,7 +63,7 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # adversary doing birthday search -- i.e. the usual 128-bit bar.
 #
 # Why not larger: the other property people size a modulus for -- hardness
-# of extracting d-th roots, which is what utils6.mul_combinations_mod's
+# of extracting d-th roots, which is what mul_combinations_mod's
 # KNOWN LEAK turns on -- is NOT obtainable from a prime at ANY size. Root
 # extraction mod a prime is efficient because the group order is known
 # (measured: ~39 ms to recover x from x^3 mod a 2048-bit prime here). Wider
@@ -72,7 +73,7 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # no hardness, and every modmul in the scheme paid for it.
 #
 # Provenance: generated here via a fresh 256-bit random odd candidate,
-# confirmed prime by utils6.is_prime (Miller-Rabin, 64 rounds) and again by
+# confirmed prime by ms6.utils6.is_prime (Miller-Rabin, 64 rounds) and again by
 # an independently written Miller-Rabin -- not transcribed from a published
 # constant, so no risk of a transcription error making it composite.
 DEFAULT_MOD = 0xbb451c13c2c59bc9e400ec787e175266aa806d1ff7382aceda7c98501b848ce5
@@ -120,7 +121,7 @@ class Acc:
 
 
 class Utils:
-    """Verifier-safe subset of utils6.Utils -- see module docstring for
+    """Verifier-safe subset of ms6.utils6.Utils -- see module docstring for
     exactly what's included/excluded and why."""
 
     def cell_product(self, cnt, mult):
@@ -292,7 +293,7 @@ class Utils:
         return C
 
     def fold_h_vector_mod(self, N, mod, group_values, b=1, global_keys=False):
-        """See utils6.Utils.fold_h_vector_mod for the full identity and
+        """See ms6.utils6.Utils.fold_h_vector_mod for the full identity and
         rationale -- vs6 only ever reaches this via vsum_level_fold_mod
         (below), always with global_keys=True."""
         groups = [list(g) for g in group_values if list(g)]
@@ -317,14 +318,14 @@ class Utils:
         return acc
 
     def vsum_level_fold_mod(self, k, mod, values, chunk_size=100, b=1, global_keys=False):
-        """Thin wrapper around fold_h_vector_mod -- see utils6.py's copy for
+        """Thin wrapper around fold_h_vector_mod -- see ms6/utils6.py's copy for
         the full rationale. Reached only via mul_combinations_mod
         (global_keys=True), to seal its bucket_sums into a single scalar."""
         groups = self.backward_chunk(list(values), chunk_size)
         return self.fold_h_vector_mod(k, mod, groups, b=b, global_keys=global_keys)[k]
 
     def mul_combinations_mod(self, N, ps, vals, mod):
-        """Modular counterpart of mul_combinations -- see utils6.py's copy
+        """Modular counterpart of mul_combinations -- see ms6/utils6.py's copy
         for the full KNOWN LEAK docstring (idx=0/1/N*(L-1)-1/N*(L-1) are
         singleton buckets, leaking 4 real columns per row via modular root
         extraction; a documented, accepted tradeoff, not fixed here)."""
