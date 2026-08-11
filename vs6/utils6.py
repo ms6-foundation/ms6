@@ -51,37 +51,57 @@ except ImportError:                   # pragma: no cover
 
 sys.set_int_max_str_digits(2000000)          # results are routinely thousands of digits
 
-# The modulus for the "_mod" family below. Every multiplication and
-# exponentiation in ms6/ps6/vs6 is reduced by it, so no intermediate value
-# grows with the dataset.
+# The accumulator modulus. Every multiplication and exponentiation in
+# ms6/ps6/vs6 is reduced by it, so no intermediate value grows with the
+# dataset.
 #
-# SIZED FOR THE JOB IT ACTUALLY DOES, which is fingerprinting: the exact
-# h == c comparison is traded for a probabilistic one, and two genuinely
-# different values collide only by chance, with probability ~1/DEFAULT_MOD
-# (the standard Schwartz-Zippel/fingerprinting argument, as in Freivalds').
-# At 256 bits that is ~2^-256 against honest error and ~2^128 work for an
-# adversary doing birthday search -- i.e. the usual 128-bit bar.
+# THIS IS THE RSA-2048 FACTORING CHALLENGE MODULUS -- a 617-digit / 2048-bit
+# COMPOSITE, published by RSA Laboratories in 1991 and never factored. It is
+# deliberately not a prime.
 #
-# Why not larger: the other property people size a modulus for -- hardness
-# of extracting d-th roots, which is what mul_combinations_mod's
-# KNOWN LEAK turns on -- is NOT obtainable from a prime at ANY size. Root
-# extraction mod a prime is efficient because the group order is known
-# (measured: ~39 ms to recover x from x^3 mod a 2048-bit prime here). Wider
-# primes buy nothing there; hardness would need a modulus of UNKNOWN order
-# (RSA modulus / class group), a different construction entirely. So the
-# previous 2048 bits was ~8x wider than the fingerprint needs while adding
-# no hardness, and every modmul in the scheme paid for it.
+# Why a composite of unknown order. The documented leak in
+# mul_combinations_mod recovers a handful of columns per row by extracting
+# d-th roots out of singleton buckets. Mod a PRIME that is efficient at any
+# size, because the group order (p-1) is public: the attacker just computes
+# d^-1 mod (p-1) and exponentiates (measured earlier in this project: ~39 ms
+# against a 2048-bit prime). Widening the prime bought nothing. Mod a
+# composite whose factorisation nobody holds, phi(n) is unknown, there is no
+# exponent to invert, and extracting d-th roots is the RSA problem. That is
+# what closes the leak's mechanism -- not a parameter choice, a change of
+# group.
 #
-# Provenance: generated here via a fresh 256-bit random odd candidate,
-# confirmed prime by ms6.utils6.is_prime (Miller-Rabin, 64 rounds) and again by
-# an independently written Miller-Rabin -- not transcribed from a published
-# constant, so no risk of a transcription error making it composite.
-DEFAULT_MOD = 0xbb451c13c2c59bc9e400ec787e175266aa806d1ff7382aceda7c98501b848ce5
+# TRUST ASSUMPTION, stated plainly: RSA-2048's factors are believed unknown
+# because RSA Security generated the challenge numbers and says it destroyed
+# them. You are trusting that claim. It is a far better position than a
+# locally generated modulus -- where whoever ran the generator could have
+# kept p and q, and could then forge -- but it is not zero-trust. Only a
+# class group of an imaginary quadratic field removes the trusted party
+# entirely, at the cost of slower arithmetic and a less familiar assumption.
+#
+# Nothing in this codebase requires the modulus to be prime: no modular
+# inverse is ever taken mod this value (audited), so the composite drops
+# straight in.
+#
+# Verified before adoption: 617 decimal digits; 2048 bits; composite by
+# Miller-Rabin (64 rounds); no factor below 100,000; Pollard rho finds
+# nothing in 200k iterations; and the value was cross-checked against an
+# independently written reconstruction, digit for digit.
+#
+# COST: ps6 is ~14x slower here than under the 256-bit prime, being almost
+# entirely modular exponentiation. commit and verify are ~2x. That is the
+# price of the hardness.
+DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
-# The 2048-bit prime this replaced. Retained so commitments produced under
-# it still verify: ms6() records the modulus in its returned params, and
-# ps6/vs6 read it from there, so an old proof carrying old params is
-# unaffected by the default moving. Also makes reverting a one-line edit.
+# Superseded moduli, retained so commitments produced under them still
+# verify: ms6() records the modulus it used in its returned params, and
+# ps6/vs6 read it from there rather than from this default. Both are PRIMES,
+# and neither offers root-extraction hardness -- see DEFAULT_MOD above.
+#
+#   LEGACY_MOD_256   the 256-bit fingerprinting prime (sized for collision
+#                    resistance only; fast, but roots are extractable)
+#   LEGACY_MOD_2048  the original 2048-bit prime
+LEGACY_MOD_256 = 0xbb451c13c2c59bc9e400ec787e175266aa806d1ff7382aceda7c98501b848ce5
+
 LEGACY_MOD_2048 = 0xd5fffd2fb08d20c26c48fbbe28a4318db27be5a781b4a22f97c579b997eb652b51c28d75143726a073190b0cd9185446bc036472f191d5d06f5bfb2469dae20c6f42792962b6fb4eab3965b42cf33247f19bd6049c0e9840d7425fe36828b1466d29deec081b067c460304be3cb43be254eb7459a3b8d19de2b77ccad491d3da27eaa807c9c921e4654627ba807c5c9c47f9f28f84f18e70d743718e5f08a692edc4665ee006555579e9af611b2575dd95668c24ccb49a6794e2f9b96b3d660d2ff544513289efe44bef4c78e5a62397efbd75069b80588c4abdee63bcfc43eb2355e3a95224a4bc57b79991038b491904aa163119739223e39f9982eee69b05
 
 _PLANES = {}

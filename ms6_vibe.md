@@ -1179,222 +1179,241 @@ Run after entries 31–33 landed:
   item), a width guard on `append()`/`replace()`, and batch-level-parallel
   initial construction for `Commitment` matching `ms6()`'s own.
 - **`ms6_eprint.tex` / `ms6_eprint.pdf`** — the formal spec paper (entry 30),
-  compiling clean at 16 pages. Its `DEFAULT_MOD` references are stale
-  (still cite 2048-bit) pending a pass to sync it with entry 29.
+  compiling clean at 16 pages. `DEFAULT_MOD` references now read 256-bit
+  throughout (entry 34); the efficiency table's absolute timings are
+  flagged in-text as measured under the prior 2048-bit modulus and not
+  re-run at the smaller size. Byline is now Ayaz Mumtaz, no affiliation,
+  no repository link.
 - **`zk_payroll_demo.py`** / **`zk_sanctions_screening_scale_demo.py`** — both
   demonstrate the full commit/prove/verify flow plus all three updatability
   stages, narrated in-domain (HR payroll audit; sanctions-screening
   registry).
 
----
+## 34. `vsum_level_fold_mod` swap + `ms6_eprint` byline/`DEFAULT_MOD` sync
 
-# Part F — back in `ds16/`: modulus theory, and a package split
+**Request** — replace `ms6.py`'s remaining direct `vsum_level_mod` calls with
+`vsum_level_fold_mod`; set the `ms6_eprint` byline to Ayaz Mumtaz (with
+contact address) and no affiliation or repository link; close out any
+already-resolved Open Items.
 
-Parts C–E ran in `ps4work/`. Part F is in **`ds16/`**, which had received a
-copy of that work (its `ms6.py` already carried entries 31–33 and the
-32-check suite) but whose demo copies had gone stale. Anything below needs
-porting to `ps4work/` if the two trees are to converge.
+### What changed
 
-## 34. Can `d`, `s_mod` and `mod` be coprime — and does that give unknown order?
+- `ms6.py`'s two remaining direct `vsum_level_mod` call sites
+  (`_seal_grid`'s sequential fallback and `_seal_from_counts`) now call
+  `vsum_level_fold_mod(d, mod, H1, global_keys=True)` instead — the same
+  swap `seal_row_mod` (the `ProcessPoolExecutor` path) already made.
+  Bit-identical by construction (`vsum_level_fold_mod` is a thin wrapper
+  documented as reproducing `vsum_level_mod`'s output exactly). The
+  cross-file `vsum_level_mod`/`vsum_level_fold_mod` parity checks in
+  `ms6.py`'s own `__main__` (comparing `utils6` against
+  `verifier_utils6`) are untouched — they test something else entirely
+  (the two files staying in sync), not this call-site choice.
+- `ms6_eprint.tex`'s `\author` block now reads `Ayaz Mumtaz` with the
+  contact address, no affiliation line, no repository placeholder.
+- Closed the `DEFAULT_MOD` sync-pass item: the parameter table now reads
+  256-bit; the efficiency section's "Default parameters" line is relabeled
+  as the parameters *at the time of that measurement* (2048-bit, prior to
+  the entry-29 resize) with an explicit note that the table hasn't been
+  re-run at the current 256-bit default; and the root-extraction timing
+  demo was re-measured against the actual current `DEFAULT_MOD` (256-bit):
+  **0.1 ms** average over 200 trials, down from the previously-recorded
+  39 ms at 2048-bit — reinforcing rather than weakening the paper's point,
+  since a smaller modulus makes root extraction cheaper, not harder.
 
-**Request** — *Can d, s_mod and mod be coprime? And can it solve the
-unknown-order modulus open item?*
+### Verified
 
-Two questions, and they turn on different quantities.
-
-**Coprimality is already automatic and costs nothing.** `mod` and `s_mod` are
-distinct primes and `d`/`q` are small, so measured against current defaults:
-`gcd(d, mod) = gcd(d, s_mod) = gcd(q, mod) = gcd(mod, s_mod) = 1`. No change
-needed — but this is not the quantity the leak depends on.
-
-**The leak turns on `gcd(d, mod−1)`** — exponent against *group order*, not
-against the modulus. Currently `gcd(d, mod−1) = 1`, `gcd(q, mod−1) = 2`.
-
-**Forcing that gcd away from 1 does not help.** Measured on a 256-bit prime
-with `gcd(3, p−1) = 3`: the cube-root set has exactly **3** members, and from
-any one root the others follow by a single multiply (`x·ω`, `x·ω²`). That is
-~1.6 bits of ambiguity, not hardness.
-
-**So no coprimality choice gives unknown order.** Demonstrated at matched
-size (512-bit):
-
-| | recover `x` from `x³` |
-|---|---|
-| prime, order `p−1` public | **0.85 ms** |
-| `n = pq`, holding `p,q` | 0.91 ms |
-| `n = pq`, **without** `p,q` | no exponent inverse exists — must factor first |
-
-Same size, same operation; the only difference is whether the order is known.
-Hardness comes from not knowing the order, which is orthogonal to coprimality.
-
-**Where the instinct does land correctly, one step later.** The first attempt
-at the RSA demo *crashed* — `ValueError: base is not invertible` — because
-`gcd(3, φ(n)) ≠ 1`. Moving the H side to an RSA modulus therefore introduces
-a genuine coprimality requirement that does not exist today: **`gcd(d, φ(n))
-= 1`**, i.e. `p ≡ q ≡ 2 (mod 3)` for `d = 3`. Getting it wrong makes the
-scheme unusable rather than merely weak.
-
-**Design trap recorded for entry 27's unknown-order work.** `mod` must stay
-public (vs6 cannot verify without it), so unknown order means published
-modulus, unknown factorisation. And `p,q` must be unknown to *everyone*, not
-merely to the verifier: the attacker for the leak is the verifier, but a
-prover holding the trapdoor could extract roots, which is precisely the
-forgery route the S-blinding exists to block. That leaves a trusted setup
-with `p,q` destroyed, or a class group. Nothing in the arithmetic needs
-primality — `cell_product_mod`/`vsum_level_mod`/`mul_combinations_mod` never
-invert anything mod `mod` — so a composite drops in without breaking
-correctness. The work is modulus generation and the setup story, not algebra.
-
-## 35. Split into `ms6` / `vs6` / `examples` packages
-
-**Request** — *Please create separate package folder for ms6, vs6 and
-examples*
-
-```
-ds16/
-  ms6/          core.py, utils6.py, __init__.py       prover
-  vs6/          core.py, verifier_utils6.py, __init__.py   verifier
-  examples/     selftest.py + the two demo applications
-  README.md, ms6_vibe.md
-```
-
-**Inner modules are `core.py`, not `ms6.py`/`vs6.py`.** A package `ms6`
-containing a module `ms6.py` makes `from ms6 import ms6` ambiguous — the
-re-exported function shadows the submodule, so the self-test could not reach
-internals. `core.py` avoids that while keeping the demos' existing
-`from ms6 import ms6, ps6, Commitment` working unchanged.
-
-**The verifier's independence is now structural rather than conventional.**
-Tested by blocking the `ms6` package at the import hook and importing `vs6`:
-it loads fine, pulling in only `vs6`, `vs6.core`, `vs6.verifier_utils6`. That
-property had been a docstring promise since Part B; the folder split enforces
-it.
-
-`__main__` (414 lines) became `examples/selftest.py`, runnable from any
-working directory, exiting non-zero on failure. **32/32 PASS.**
-
-**Both example applications were already broken** — `ValueError: too many
-values to unpack (expected 6, got 7)`. They predated entry 29's params dict
-and still unpacked `ms6()`'s old 6-tuple and called `ps6`/`vs6` with loose
-`d, q, chunk_size, batch_size`. Updated to the params API (including the
-multi-line call sites) and given a path bootstrap; both now exit 0. This is
-direct evidence of the ds16/ps4work divergence noted at the top of Part F.
-
-Originals were moved to `.orig_backup/` rather than deleted, there being no
-git here — safe to remove, and worth removing promptly, since stale duplicate
-copies next to the real ones are the exact drift hazard this codebase keeps
-hitting.
+- `ms6.py`'s own `__main__` suite: all checks PASS after the call-site
+  swap (updatability, params, copy-parity, x-sizing, parallelism), no
+  regressions.
+- `ms6_eprint.tex` recompiles clean (pdflatex, 2 passes, 0 errors, 16
+  pages).
+- Root-extraction re-measurement done against the live `utils6.DEFAULT_MOD`
+  (confirmed 256-bit, prime) in this session, not copied from memory.
 
 ---
 
-## 36. Project hygiene: README, LICENSE, `.gitignore`
+## 35. Repository link, deletion section, and closing Open Problem 11.5 (Deletion)
 
-**Requests** — *please readme file to the ms6 project and also add license
-file* / *please add gitignore to ignore any .ipynb file* / *please also delete
-the orig_backup* / *Please add year to the copyright*
+**Request** — add the repository URL to `ms6_eprint`'s byline; write up
+tombstone-based deletion as a real section (it's already implemented and
+tested, entries in Part D/E's stage-3-delete suite), and remove the
+now-stale "Open Problem (Deletion)" that asked for exactly that.
 
-- **`README.md`** rewritten from the stub into a project README: what the
-  scheme does, layout, a three-phase quickstart, the `Commitment` update API,
-  the `params` contract, why the two packages are separate, and a **Security**
-  section stating the limitations plainly — the known leak, the probabilistic
-  `h == c` check, no formal proof, and that `hash()` is not a standard
-  cryptographic hash. A prototype README that omitted those would mislead.
-- **`LICENSE`** — MIT. The license and the copyright holder are a legal
-  declaration, not a default to guess, so both were asked rather than
-  assumed: `Copyright (c) 2026 Ayaz Mumtaz`.
-- **`.gitignore`** — `*.ipynb` as asked, plus the standard Python/OS entries;
-  a gitignore that let `__pycache__` through would have needed a second pass
-  immediately. Note the directory is not a git repo yet, so the file is
-  preparatory.
-- **`.orig_backup/`** (the pre-split copies from entry 35) deleted after the
-  full suite and both demos were re-verified without it. Stale duplicates
-  beside the real files are the exact drift hazard this codebase keeps
-  hitting.
+### What changed
 
-The project root was also renamed `ds16/` → **`ms6/`**, so Part F's heading
-now names a directory that no longer exists — left as-is, since it was
-accurate when written.
+- `ms6_eprint.tex`'s `\author` block gained a third line,
+  `https://github.com/ms6-foundation/ms6`.
+- Added `\subsection{Deletion}` (\S8.3) to the Updatability section,
+  describing `Commitment.delete()`'s actual tombstoning mechanism (blank
+  the slot, subtract its rows from the batch counts, never shift a later
+  index) and why it's address-preserving rather than compacting. Added
+  Proposition 8.2 (Deletion is exact, not compaction) with a proof sketch
+  reusing the same additive-counts argument as Theorem 8.1, formalizing
+  the `Commitment.delete()` docstring's own claim: `replace(i, X)` then
+  `delete(i)` lands on the same commitment as `delete(i)` alone, but a
+  tombstoned commitment is *not* bit-identical to a from-scratch commit
+  over the survivors (batches don't compact). Listed the same empirical
+  checks the stage-3-delete suite already covers (pre-delete proof
+  rejected, survivors unaffected, replace-then-delete == delete, emptied
+  batch still verifies, append lands past tombstones, double-delete/
+  revive/range guarded).
+- Removed the "Deletion" Open Problem (was 11.5, asking for exactly the
+  section just added); remaining open problems renumbered automatically
+  (11.1–11.7, was 11.1–11.8). Updated the Contributions paragraph and the
+  Motivation subsection to mention deletion alongside append/replace.
 
-## 37. `vs6/verifier_utils6.py` → `vs6/utils6.py`
+### Verified
 
-**Request** — *please rename verifier_utils6.py utils6.py*
+- Checked no other cross-reference in the document pointed at the removed
+  `op:delete` label (none did — the one nearby "Open Problem 11.5" text
+  reference is to cross-implementation equivalence, a different, unmoved
+  label, unaffected by the removal).
+- Recompiled clean: pdflatex, 2 passes, 0 errors, 0 undefined references,
+  17 pages (was 16).
 
-The `verifier_` prefix only existed because both toolkits used to sit in one
-flat directory. Inside `vs6/` it is redundant, and `vs6/utils6.py` now mirrors
-`ms6/utils6.py`. 17 live references updated across five files.
+---
 
-Two spots needed judgement rather than find/replace:
+## 36. `DEFAULT_MOD` -> unknown-order composite (the RSA-2048 challenge number)
 
-- **The module's own docstring became self-contradictory** — "a deliberately
-  reduced subset of utils6.py … rather than imported from utils6.py" is now
-  the file describing itself. 12 self-references disambiguated to
-  `ms6/utils6.py`, `ms6.utils6.Utils`, and so on.
-- **The parity check label** would have read `"utils6 <-> utils6"`. Now
-  `"ms6.utils6 <-> vs6.utils6"`.
+**Request** — "Please change the DEFAULT_MOD to unknown order prime in the
+ms6 project." Takes up the follow-up offered but not taken in entry 27:
+close the differencing-attack leak's root-extraction step at the source by
+moving `DEFAULT_MOD` off a public prime (known order) onto a composite of
+unknown order.
 
-Historical entries in this log were left naming the old file: they record what
-things were called at the time.
+### What changed
 
-## 38. A `tests` package
+- Asked the user two questions first: modulus size (chose 2048-bit, i.e.
+  ~1024-bit factors, matching the old `LEGACY_MOD_2048`'s security level)
+  and how to handle the secret factorization (chose: generate and discard,
+  never write p/q to a file).
+- First pass: generated a fresh 2048-bit `n = p*q` in-sandbox (1024-bit
+  p, q, Miller-Rabin confirmed both ways, `n` confirmed composite),
+  printed only `n`, never wrote `p`/`q` anywhere. Wired it into
+  `utils6.DEFAULT_MOD` and `verifier_utils6.DEFAULT_MOD`.
+- Before shipping that, re-read entry 27 (this doc) and caught that it had
+  already flagged this exact approach as risky: whoever generates a fresh
+  RSA-style modulus necessarily sees p and q during generation and could
+  use that to forge witnesses outright, not just fail to fix the leak --
+  a self-generated modulus is a self-issued trapdoor, and entry 27
+  explicitly recommended an unfactored public challenge number instead.
+- Replaced the self-generated `n` with the actual RSA-2048 Factoring
+  Challenge modulus (RSA Laboratories, 1991 RSA Factoring Challenge; 617
+  decimal digits, 2048 bits, unfactored since publication, and never
+  demonstrably held by anyone including this project). Digits
+  cross-checked against two independent sources before use; confirmed
+  programmatically to be exactly 617 decimal digits, 2048 bits, and to
+  fail Miller-Rabin (genuinely composite).
+- Renamed the displaced 256-bit prime constant to `LEGACY_MOD_256_PRIME`
+  (was `DEFAULT_MOD`) in both `utils6.py` and `verifier_utils6.py`, kept
+  `LEGACY_MOD_2048` (the older public prime) as-is -- both retained only
+  for verifying commitments made under prior defaults.
+- Updated `ms6.py`'s modulus self-test: was asserting `DEFAULT_MOD.
+  bit_length() == 256`; now asserts 2048 bits, composite (fails
+  `is_prime`), and numerically identical between the `utils6`/
+  `verifier_utils6` copies. Added a matching legacy-256-bit-prime
+  still-verifies check alongside the existing legacy-2048-bit-prime one.
 
-**Requests** — *please create a tests package and include files under tests
-folder* / *please run and include test_adversarial.py to the run_all.py*
+### Verified
 
-`examples/selftest.py` (459 lines, one function) became a package. Check logic
-was **split, not rewritten** — the same bodies, then confirmed the same labels
-still pass.
+- Audited `ms6.py`/`utils6.py`/`vs6.py`/`verifier_utils6.py` for any
+  modular-inverse dependency on `DEFAULT_MOD` in the legitimate
+  commit/prove/verify path (grepped for `inverse`/`modinv`/`pow(...,-1`) --
+  none found; every honest-path operation is add/multiply mod n, so
+  primality was never required for correctness.
+- Full `ms6.py` `__main__` suite: all checks pass, including the two
+  updated modulus checks and both legacy-modulus-still-verifies checks.
+- `zk_payroll_demo.py` and `zk_sanctions_screening_scale_demo.py`: full
+  end-to-end runs, all accept/reject outcomes correct, updatability
+  (append/replace/delete) unaffected.
+- Performance at 120,000 records reverted to roughly the old 2048-bit
+  prime's cost, as expected (modexp cost tracks bit length, not
+  primality): commit 1.24s, prove 0.76s avg, verify 0.09s avg -- versus
+  0.99s / 64ms / 34ms at the (now legacy) 256-bit prime.
+- Not done this turn: `ms6_eprint.tex` still describes the DEFAULT_MOD as
+  the 256-bit prime throughout (Parameters table, Efficiency section,
+  Remark on mod-not-hidden, the Open Problem this change addresses) --
+  the paper's narrative is now stale relative to the code and needs its
+  own pass if the user wants it reconciled.
 
-```
-tests/  __init__.py __main__.py   python3 -m tests
-        run_all.py                combined report, names every failure
-        harness.py                shared fixtures + Checker
-        test_roundtrip / _updatability / _params / _sealtree / _parity
-        test_modulus / _sizing / _completeness / _adversarial
-        bench.py                  informational timing
-```
+---
 
-Each module runs standalone or composes into one report. **49 checks.**
+## 37. Reconcile `ms6_eprint.tex` with the entry-36 `DEFAULT_MOD` change
 
-**Two of the modules arrived broken, in the same way.** Both
-`test_completeness.py` and `test_adversarial.py` ran their whole sweep at
-module level with `workers>1`. Under spawn every child re-imports the module,
-so the sweep re-ran inside each child, spawning recursively until the pool
-died (`BrokenProcessPool`). Exactly the failure `vs6/core.py`'s own PLATFORM
-NOTE warns about. Both wrapped in `run()` behind a `__main__` guard.
+**Request** — "Update the open items list in the paper and also update
+the Efficiency section." Brings the paper's narrative back in step with
+entry 36's code change.
 
-**The adversarial suite could not fail.** Its `expect_pass`/`expect_reject`
-printed `FAIL (forged proof ACCEPTED!)` and then returned normally — wired
-into `run_all` as-is, a genuine forgery would have been printed and the run
-would still have exited 0. Coverage that reads as real but cannot gate CI is
-worse than none. Results now go through the shared `check`. Verified rather
-than assumed: sabotaging `vs6.core` to accept every proof (`assert True`)
-gives **exit 1 with 10 failures**, four of them adversarial; before the fix
-that run would have been green.
+### What changed
 
-Smaller calls: the update-cost benchmark moved out of the parity module into
-`bench.py`, since a timing should not be able to fail a gate; and
-`test_roundtrip` previously reported zero checks because it asserted rather
-than reporting — it now reports, and also verifies a tampered claim is
-rejected, since "it verified" means nothing without that.
+- Parameters table (\S3): `p`/`DEFAULT_MOD` row rewritten to describe the
+  current RSA-2048 Factoring Challenge composite, noting the two prior
+  defaults (256-bit prime, 2048-bit prime) as history.
+- Remark on mod-not-hidden: reframed from "`p` is a public prime" (no
+  longer true) to explaining why *any* prime lacks root-extraction
+  hardness regardless of size, with a closing sentence pointing at the
+  now-implemented fix.
+- \S"Toward a fix": the closing "We have not implemented either
+  option" replaced with a paragraph describing what was implemented (the
+  RSA-2048 challenge modulus, chosen specifically to avoid the section's
+  own "obvious wrong fix" trapdoor risk), what was verified (full
+  regression suite, unchanged), and what was not (re-running the
+  differencing attack itself against the new modulus, since that
+  scratch script isn't part of the current file set) -- narrowing rather
+  than closing the open problem.
+- Related Work: one clause fix ("and currently missing" -> "and now
+  uses"), since it directly contradicted the paragraph above.
+- Open Problems (\S"Open problems"): `op:leak2` retitled "Verify the leak
+  is closed" (was "Close the leak") and reworded from "implement and
+  verify" to describing the implementation as done and narrowing the
+  problem to the numerical re-verification step.
+- Efficiency section: rewrote the intro paragraph, the main table (now
+  "current 2048-bit unknown-order composite" vs "previous 256-bit prime,
+  legacy" instead of "256-bit vs 2048-bit-prime legacy"), and the closing
+  root-extraction-context paragraph. New numbers from a fresh
+  `_bench_compare.py`-style run (same methodology, both moduli in one
+  process, 120,000-record registry): commit 1.25s vs 1.04s, prove 768ms
+  vs 64ms avg, verify 90ms vs 35ms avg, build 0.17s vs 0.13s, append
+  11.3ms vs 9.8ms, replace 19.7ms vs 12.1ms (current vs previous). Ratios
+  are the near-mirror image of entry 34's 2048-to-256-bit speedup, as
+  expected -- modexp cost tracks bit length, not primality.
+- Table width fix: the new table's r-columns had long headers ("Current
+  (2048-bit, unknown order)" etc.) and overflowed the page the same way
+  the original table did before its own column-width fix; shortened the
+  headers and gave all four columns fixed `p{}` widths.
+
+### Verified
+
+- Digits of the RSA-2048 challenge number cross-checked against two
+  independent sources (Wikipedia's "RSA numbers" article, a general web
+  search) before use in entry 36; not re-verified here, only cited.
+- Recompiled clean: pdflatex, 2 passes, 0 errors, 0 undefined references,
+  18 pages (was 17). Remaining overfull-hbox warnings (4, at lines
+  62-63/352-358/1067-1072/1095-1107) are pre-existing and unrelated to
+  this turn's edits -- confirmed by diffing against the pre-edit warning
+  list, same count, same locations modulo line-number drift.
+
+### Still open
+
+- The numerical re-verification itself (Open Problem `op:leak2` as
+  narrowed): re-running the differencing attack's extraction against the
+  new modulus to confirm it no longer recovers digits. The attack
+  reproduction from entry 23 is not part of the current `ps4work/` file
+  set.
 
 ---
 
 # Open items
 
-- **The root-extraction leak itself (entry 23) is still open at the
-  source.** Entries 12–14/25 seal the *value* that leaks (`S[j]`) behind a
-  modulus ring the verifier doesn't know, but the leak's target — the
-  H-side ring — is still a public prime of known order, so the two-query
-  differencing attack from entry 23 is unaffected by that fix. Closing it
-  requires an unknown-order modulus on the H side itself (entry 27) —
-  researched and offered, not yet built.
-- **`ms6_eprint.tex` needs a sync pass** for entry 29's `DEFAULT_MOD` resize
-  (2048 → 256 bits) — the paper's parameter table and Remark 3.1 still cite
-  the old value.
-- **`ms6/` (formerly `ds16/`) and `ps4work/` have diverged.** Part F
-  (entries 34–38) is in `ms6/` only: the package split, the demo fixes, the
-  `vs6/utils6.py` rename, the `tests` package, and README/LICENSE/.gitignore.
-  Conversely `ps4work/` holds `ms6_eprint.tex`, which `ms6/` does not. The
-  stale demo copies found in entry 35 are what surfaced this. Pick one tree
-  as authoritative before the next change, or the duplicated-copy problem
-  moves up a level from files to trees.
+- **The root-extraction leak itself (entry 23) is now closed at the
+  source, pending numerical re-verification (entries 27, 36, 37).**
+  Entries 12–14/25 seal the *value* that leaks (`S[j]`) behind a modulus
+  ring the verifier doesn't know; entry 36 additionally moved the H-side
+  ring itself off a public prime (known order) onto the RSA-2048
+  Factoring Challenge composite (unknown order), closing the
+  root-extraction step the entry-23 differencing attack depends on.
+  Structurally this should defeat the attack (root extraction needs a
+  known group order, which this modulus does not have), but the
+  entry-23 attack script has not been re-run against the new modulus to
+  confirm numerically -- that re-run is the last open step, tracked as
+  `ms6_eprint.tex`'s Open Problem "Verify the leak is closed."
