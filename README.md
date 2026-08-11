@@ -31,6 +31,7 @@ tests/                     49 checks; exits non-zero on failure
   test_sizing.py             x-sizing determinism, parallel construction
   test_completeness.py       sweep over the workers>1 batch-routing path
   test_adversarial.py        tamper / forge / equivocation attempts
+  test_leak.py               root-extraction leak: prime vs unknown-order
   bench.py                   update cost (informational, never fails)
 examples/
   payroll_audit_demo.py      HR proves salaries to an auditor

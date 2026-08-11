@@ -92,7 +92,7 @@ DEFAULT_S_MOD = DEFAULT_MOD
 # _seal_grid, and a changed s_q would rebuild S differently and invalidate
 # the commitment. Commitment therefore captures it at construction rather
 # than reading the constant afresh.
-DEFAULT_S_Q = 70
+DEFAULT_S_Q = 10
 
 DEFAULT_S_EXP = 3
 DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
@@ -192,9 +192,14 @@ def unpack_params(params, expect=None):
 
 
 def chunk_of(val, iden, x, chunk_size):
+    """Digit rows for one value. Short first chunks and missing rows are
+    filled with u.PAD, which occupies its own count slot and contributes no
+    prime -- padding is deterministic and public, so it must not affect the
+    cell value. It cannot be a decimal digit: every digit indexes a prime
+    and therefore carries information."""
     chunks = list(ut.backward_chunk(val, chunk_size))
-    chunks[0] = f"{chunks[0]:1>{chunk_size}}"
-    return [iden] * (x - len(chunks)) + chunks
+    chunks[0] = f"{chunks[0]:{u.PAD}>{chunk_size}}"
+    return [u.PAD * chunk_size] * (x - len(chunks)) + chunks
 
 
 def chunks(iden, x, chunk_size):
@@ -246,13 +251,11 @@ def _s0_grid(s, batch_index, rows, chunk_size, s_mod):
     """Per-cell blinding seeds, expanded from the secret salt so that every
     cell gets a full-width (s_mod-sized) value.
 
-    This replaces a one-decimal-digit-per-cell layout, under which any cell
-    whose accS counts came out all-zero -- the padding rows, plus any
-    column no item's digest actually reached -- ended up with
-    S = S0[i][j] in 1..9, i.e. ~3 bits of blinding. Measured at
-    chunk_size=40/batch_size=1000 that was 46% of the grid (74 of 160
-    cells at <= 8 bits), so nearly half the blinding grid was doing
-    essentially nothing.
+    Every cell gets a full-width value. A one-digit-per-cell seed would
+    leave any cell whose accS counts came out all-zero -- padding rows, and
+    any column no item's digest reached -- blinded by a single decimal
+    digit, which at chunk_size=40/batch_size=1000 would be roughly half the
+    grid carrying under 8 bits of blinding.
 
     SHAKE-256 rather than Random(seed): the cells are expanded from `s`, so
     an attacker who recovers one S[i][j] -- and utils6.mul_combinations_mod's
@@ -294,8 +297,8 @@ def _hash_item(val, s_exp):
     digest width BEFORE deciding how many rows (x) this batch's grid
     needs -- see _ms6_batch's own x-sizing comment for why that ordering
     matters."""
-    h1s = _s(ut.hash(val)).replace('0', '1')
-    h2s = _s(ut.hash(h1s, s_exp)).replace('0', '1')
+    h1s = _s(ut.hash(val))
+    h2s = _s(ut.hash(h1s, s_exp))
     return h1s, h2s
 
 
@@ -373,7 +376,7 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # every _ms6_batch call), so without this, perm would be identical
     # across the whole commit. See _column_perm's docstring.
     perm = _column_perm(s * 1_000_000_007 + batch_index, chunk_size)
-    iden = f"{'':1>{chunk_size}}"
+    iden = u.PAD * chunk_size
 
     # Every item is hashed once, up front, so x (this batch's row count)
     # can be sized from the ACTUAL digests in play, rather than guessed at.
@@ -430,10 +433,10 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # H/S: per-(row, column) products of every item's digit contribution,
     # both raised to q, and S additionally combined with the secret salt
     # grid S0 and later raised to d below. Computed via cell_product_mod
-    # from accH/accS's digit counts (prime-factorized into powers of
-    # 2/3/5/7, since digits are always 1-9) instead of one multiplication
-    # per item, reduced mod throughout so intermediate values stay bounded
-    # regardless of dataset size.
+    # from accH/accS's digit counts (each digit contributing its own prime
+    # from DIGIT_PRIMES) instead of one multiplication per item, reduced
+    # mod throughout so intermediate values stay bounded regardless of
+    # dataset size.
     #
     # H reduces mod `mod`; S reduces mod `s_mod`, its own independently
     # choosable ring (see DEFAULT_S_MOD). The two rings need not match, and
@@ -527,14 +530,14 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
 def _seal_chunker(x, chunk_size):
     """chunk_of for the seal side (no column permutation -- _seal_batch
     folds h scalars, not item digests)."""
-    return chunks(f"{'':1>{chunk_size}}", x, chunk_size)
+    return chunks(u.PAD * chunk_size, x, chunk_size)
 
 
 def _seal_rows(val, chunk_of):
     """One folded value's digit rows, as _seal_batch accumulates them.
     Shared with _SealTree so a cached node can add or subtract exactly the
     rows the flat fold would have contributed."""
-    return chunk_of(_s(ut.hash(val, 1)).replace('0', '1'))
+    return chunk_of(_s(ut.hash(val, 1)))
 
 
 def _seal_from_counts(cnt, chunk_size, d, q, mod):
@@ -902,7 +905,7 @@ class Commitment:
                 self.perms, self.params)
 
     def _chunk_of(self, b):
-        iden = f"{'':1>{self.chunk_size}}"
+        iden = u.PAD * self.chunk_size
         return chunks(iden, self.x_list[b], self.chunk_size)
 
     def _s0(self, b):

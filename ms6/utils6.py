@@ -59,9 +59,11 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # nothing in 200k iterations; and the value was cross-checked against an
 # independently written reconstruction, digit for digit.
 #
-# COST: ps6 is ~14x slower here than under the 256-bit prime, being almost
-# entirely modular exponentiation. commit and verify are ~2x. That is the
-# price of the hardness.
+# COST: modular exponentiation dominates ps6, so its cost tracks this
+# modulus's bit length -- roughly an order of magnitude above what a
+# 256-bit modulus would cost, with commit and verify affected far less.
+# The cost is of the WIDTH, not of the composite: a prime of the same size
+# performs the same and buys no hardness.
 DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
 # NOTE on older commitments: no constant is kept here for the primes this
@@ -77,6 +79,31 @@ DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b
 # single str.translate of the digit string plus a Horner fold, instead of
 # a per-digit recursion -- W (2 for k=1, 19 for k=10) subquadratic
 # string->int conversions rather than O(len(val)) Python-level calls.
+
+# Each decimal digit indexes its OWN prime, rather than being used as the
+# multiplicative base directly. Using the digit itself collapses the ten
+# digits onto the four primes 2,3,5,7 (4=2^2, 6=2*3, 8=2^3, 9=3^2) and
+# annihilates 1 entirely, so distinct digit multisets produce identical cell
+# values -- {6} == {2,3}, {4} == {2,2}, {1,1,1,6} == {2,3} -- independently
+# of the modulus. That collapse is what stopped the accumulator binding the
+# digit grid; no choice of modulus repairs it, because the two inputs map to
+# the same group element rather than colliding by chance.
+#
+# With one prime per digit the exponent vector (cnt_0..cnt_9) is recoverable
+# from the product over Z by unique factorisation, and finding a collision
+# mod n means exhibiting prod p_i^{d_i} = 1 with some d_i != 0 -- a
+# multiplicative relation among small primes modulo a composite of unknown
+# order, the assumption RSA accumulators already rest on.
+DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
+
+# chunk_of pads short digests and narrow first chunks. Padding is
+# deterministic and identical on both sides, so it should carry no
+# information; it gets its own count slot (index 10) that no prime is
+# assigned to, rather than reusing a real digit. ':' is chr(58), so
+# ord(ch)-48 lands it in slot 10 with no change to Acc.flush.
+PAD = ':'
+PAD_SLOT = 10
+
 _PLANES = {}
 _POWSET = None
 
@@ -85,7 +112,7 @@ class Acc:
 
     def __init__(self, rows, cols):
         self.rows, self.cols = rows, cols
-        self.cnt = [[[0] * 10 for _ in range(cols)] for _ in range(rows)]
+        self.cnt = [[[0] * 11 for _ in range(cols)] for _ in range(rows)]
         self.buf = [[] for _ in range(rows)]
 
     def add(self, chunks):
@@ -150,17 +177,18 @@ class Utils:
     # len(oset)-long chain of big-int multiplications per output cell
     # (which would cost O(len(oset)^2) overall, since the accumulator
     # grows roughly linearly in digit-count with every step): hm entries
-    # only ever contain characters '1'-'9' (digit '1' contributes nothing,
-    # 1**k==1), and every other digit factors into primes 2/3/5/7:
+    # contain the ten decimal digits plus PAD, and each digit contributes
+    # DIGIT_PRIMES[digit] raised to its own count:
     #
-    #     2 -> 2^1   3 -> 3^1   4 -> 2^2   5 -> 5^1
-    #     6 -> 2*3   7 -> 7^1   8 -> 2^3   9 -> 3^2
+    #     0 -> 2   1 -> 3   2 -> 5   3 -> 7   4 -> 11
+    #     5 -> 13  6 -> 17  7 -> 19  8 -> 23  9 -> 29     PAD -> nothing
     #
     # So rather than one multiplication per item per cell, it's enough to
     # know how many times each digit occurs at that cell across the
     # relevant rows (a cheap count, done at C speed via str.join + slice +
-    # Counter) and then evaluate the cell as a single 2^e2 * 3^e3 * 5^e5 *
-    # 7^e7 -- four big-int powers total per cell.
+    # Counter) and then evaluate the cell as one power per distinct digit
+    # present -- at most ten big-int powers per cell, independent of how
+    # many items the cell aggregates.
     def col_digit_counts(self, row_strings, chunk_size):
         """Per-column digit counts, across several equal-length digit strings
         belonging to the same output row."""
@@ -169,16 +197,16 @@ class Utils:
     
     
     def cell_pow_product(self, cnt, mult):
-        """prod(v**cnt[v] for v in 1..9) ** mult, via prime factorisation."""
-        e2 = (cnt.get('2', 0) + 2*cnt.get('4', 0) + cnt.get('6', 0) + 3*cnt.get('8', 0)) * mult
-        e3 = (cnt.get('3', 0) + cnt.get('6', 0) + 2*cnt.get('9', 0)) * mult
-        e5 = cnt.get('5', 0) * mult
-        e7 = cnt.get('7', 0) * mult
+        """prod(DIGIT_PRIMES[v]**cnt[v] for v in 0..9) ** mult.
+
+        One distinct prime per digit, so the exponent vector is recoverable
+        from the product by unique factorisation. PAD occupies count slot
+        10 and is assigned no prime, so padding contributes nothing."""
         val = _Z(1)
-        if e2: val *= _Z(2) ** e2
-        if e3: val *= _Z(3) ** e3
-        if e5: val *= _Z(5) ** e5
-        if e7: val *= _Z(7) ** e7
+        for v in range(10):
+            e = cnt.get(str(v), 0) * mult
+            if e:
+                val *= _Z(DIGIT_PRIMES[v]) ** e
         return val
 
 
@@ -189,39 +217,34 @@ class Utils:
         scale -- pow(base, e, mod) is O(log e) modular multiplications
         (each bounded by `mod`'s size) instead of producing a base**e that
         is itself e*log10(base) decimal digits long."""
-        e2 = (cnt.get('2', 0) + 2*cnt.get('4', 0) + cnt.get('6', 0) + 3*cnt.get('8', 0)) * mult
-        e3 = (cnt.get('3', 0) + cnt.get('6', 0) + 2*cnt.get('9', 0)) * mult
-        e5 = cnt.get('5', 0) * mult
-        e7 = cnt.get('7', 0) * mult
         val = _Z(1)
-        if e2: val = (val * pow(_Z(2), e2, mod)) % mod
-        if e3: val = (val * pow(_Z(3), e3, mod)) % mod
-        if e5: val = (val * pow(_Z(5), e5, mod)) % mod
-        if e7: val = (val * pow(_Z(7), e7, mod)) % mod
+        for v in range(10):
+            e = cnt.get(str(v), 0) * mult
+            if e:
+                val = (val * pow(_Z(DIGIT_PRIMES[v]), e, mod)) % mod
         return val
 
 
     def cell_product(self, cnt, mult):
-        """prod(d**cnt[d] for d in 1..9) ** mult, via prime factorisation."""
-        e2 = (cnt[2] + 2 * cnt[4] + cnt[6] + 3 * cnt[8]) * mult
-        e3 = (cnt[3] + cnt[6] + 2 * cnt[9]) * mult
-        e5 = cnt[5] * mult
-        e7 = cnt[7] * mult
-        two, three, five, seven = (_mpz(2), _mpz(3), _mpz(5), _mpz(7)) if _mpz else (2, 3, 5, 7)
-        return (two ** e2) * (three ** e3) * (five ** e5) * (seven ** e7)
+        """prod(DIGIT_PRIMES[d]**cnt[d] for d in 0..9) ** mult.
+
+        One distinct prime per digit; PAD (slot 10) is assigned none, so
+        padding contributes nothing."""
+        val = _Z(1)
+        for v in range(10):
+            e = cnt[v] * mult
+            if e:
+                val *= _Z(DIGIT_PRIMES[v]) ** e
+        return val
 
 
     def cell_product_mod(self, cnt, mult, mod):
         """Modular counterpart of cell_product -- see cell_pow_product_mod."""
-        e2 = (cnt[2] + 2 * cnt[4] + cnt[6] + 3 * cnt[8]) * mult
-        e3 = (cnt[3] + cnt[6] + 2 * cnt[9]) * mult
-        e5 = cnt[5] * mult
-        e7 = cnt[7] * mult
-        two, three, five, seven = (_mpz(2), _mpz(3), _mpz(5), _mpz(7)) if _mpz else (2, 3, 5, 7)
-        val = pow(two, e2, mod) if e2 else _Z(1)
-        if e3: val = (val * pow(three, e3, mod)) % mod
-        if e5: val = (val * pow(five, e5, mod)) % mod
-        if e7: val = (val * pow(seven, e7, mod)) % mod
+        val = _Z(1)
+        for v in range(10):
+            e = cnt[v] * mult
+            if e:
+                val = (val * pow(_Z(DIGIT_PRIMES[v]), e, mod)) % mod
         return val
 
 
