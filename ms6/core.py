@@ -49,21 +49,50 @@ DEFAULT_MOD = u.DEFAULT_MOD
 # ms6 and ps6 use that same integer as a base in the mod-DEFAULT_MOD ring
 # (pow(S[j], d, mod)), so how the value was derived never enters the check.
 #
-# CAVEAT -- this does not by itself hide anything. The quantity the known
-# leak recovers (see utils6.mul_combinations_mod) is the group element
-# S[j] itself, and possessing S[j] is all an attacker needs to unblind;
-# whether its discrete log is hard is irrelevant, as is the ring it was
-# built in. Closing that leak needs d-th roots to be hard, i.e. a modulus of
-# UNKNOWN ORDER (RSA modulus / class group) on the H side -- not a different
-# prime here. This constant is the knob, not the fix.
+# S's ring is the SAME unknown-order composite as the H side, and this is
+# now the default for every commit (ms6() no longer generates a per-commit
+# prime for it).
+#
+# TRADE-OFF, deliberately made. S's ring used to be a freshly generated
+# 512-bit prime, secret per commit and never shared with the verifier. That
+# secrecy is gone; this modulus is public. What replaces it is hardness:
+# with phi(n) unknown, an attacker holding S[j] cannot unwind it through
+# cell_product_mod to recover accS's counts, whereas a public prime ring
+# would have let them.
+#
+# The two cannot be combined. A per-commit SECRET unknown-order modulus
+# would mean generating an RSA modulus per commit, and whoever generated it
+# would hold p and q -- a trapdoor that permits exactly the root extraction
+# the H-side change exists to prevent. Unknown order therefore requires a
+# public nothing-up-my-sleeve value, not a secret one.
+#
+# What did NOT change: commitments over the same data are still unlinkable,
+# because the per-batch salt is still drawn fresh and S0 is a SHAKE-256
+# expansion of it (see _s0_grid). The salt, not the modulus, is what makes
+# two commits of the same data differ.
 DEFAULT_S_MOD = DEFAULT_MOD
 
-# Size of the fresh secret prime ms6() generates per commit when s_mod is
-# left at None (the default). 512 bits puts S's values far beyond brute-force
-# range while costing ~0.1s to generate; 1024 costs ~0.6s and 2048 costs
-# 4-18s, which is not worth paying on every commit given S only needs to be
-# unguessable, not to carry a hardness assumption of its own.
-DEFAULT_S_MOD_BITS = 512
+# Exponent used when folding accS's digit counts into S, the S-side
+# counterpart of `q`. Kept separate because the two are not constrained the
+# same way:
+#
+#   q     is load-bearing across parties. ms6's H, ps6's oset row and vs6's
+#         interlaced M must all raise digits to the SAME exponent or the
+#         check identity row[j]*M[j] == H[j] does not close. It lives in
+#         params for exactly that reason.
+#   s_q   is prover-only and free. S's *value* travels to ps6 in s_list, and
+#         ms6/ps6 both use that integer as a base in pow(S[j], d, mod), so
+#         how S was folded never enters anyone's arithmetic. Nothing
+#         outside this file ever needs to know it -- it is deliberately NOT
+#         in params.
+#
+# So this value is unconstrained; 7 simply keeps it distinct from the
+# default q=10. It must stay STABLE for the lifetime of a commitment,
+# though: Commitment.append/replace/delete reseal a batch through
+# _seal_grid, and a changed s_q would rebuild S differently and invalidate
+# the commitment. Commitment therefore captures it at construction rather
+# than reading the constant afresh.
+DEFAULT_S_Q = 70
 
 DEFAULT_S_EXP = 3
 DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
@@ -298,7 +327,8 @@ def _apply_rows(cnt, rows, sign):
             cnt_i[j][ord(ch) - 48] += sign
 
 
-def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod, workers=DEFAULT_WORKERS):
+def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
+               workers=DEFAULT_WORKERS, s_q=DEFAULT_S_Q):
     """Counts + salt grid -> (h, S) for one batch.
 
     This is the whole tail of a batch commit, from digit counts onward, and
@@ -310,7 +340,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod, workers=DEF
     one over the same items."""
     H = [[ut.cell_product_mod(accH_cnt[i][j], q, mod) for j in range(chunk_size)]
          for i in range(len(accH_cnt))]
-    S = [[(S0[i][j] * ut.cell_product_mod(accS_cnt[i][j], q, s_mod)) % s_mod for j in range(chunk_size)]
+    S = [[(S0[i][j] * ut.cell_product_mod(accS_cnt[i][j], s_q, s_mod)) % s_mod for j in range(chunk_size)]
          for i in range(len(accS_cnt))]
 
     H = [[(hv * pow(sv, d, mod)) % mod for hv, sv in zip(H1, S1)] for H1, S1 in zip(H, S)]
@@ -326,6 +356,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod, workers=DEF
 
 
 def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
+               s_q=DEFAULT_S_Q,
                keep_hm=DEFAULT_KEEP_HM, workers=DEFAULT_WORKERS, batch_index=0, batch_salt=None):
     """Commits a single batch: builds its own accH/accS/S0 from just the
     `vals` it's given, and returns that batch's own h.
@@ -418,7 +449,7 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # row's chunk_size column values into one h_d value; it's independent
     # per row, so it parallelises across rows. All of that lives in
     # _seal_grid, shared with the incremental update path.
-    h, S = _seal_grid(accH.cnt, accS.cnt, S0, chunk_size, d, q, mod, s_mod, workers)
+    h, S = _seal_grid(accH.cnt, accS.cnt, S0, chunk_size, d, q, mod, s_mod, workers, s_q)
 
     # mod is not returned: it's a fixed, public parameter (like chunk_size
     # or d), not a per-commit secret -- ps6/vs6 default to the same
@@ -518,8 +549,8 @@ def _seal_from_counts(cnt, chunk_size, d, q, mod):
 
 
 def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
-        mod=DEFAULT_MOD, s_mod=None, keep_hm=DEFAULT_KEEP_HM, workers=DEFAULT_WORKERS,
-        seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+        mod=DEFAULT_MOD, s_mod=None, s_q=DEFAULT_S_Q, keep_hm=DEFAULT_KEEP_HM,
+        workers=DEFAULT_WORKERS, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
     """Splits vals into batch_size-sized groups and commits to each one
     independently via _ms6_batch, all under the same secret salt s. Every
     batch's h is already fully row-sealed before this function folds batches
@@ -532,15 +563,14 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     (see _column_perm) -- pass it to vs6 alongside x_list; ps6 doesn't
     need it separately, since hm_list is already stored in permuted form.
 
-    s_mod=None (the default) generates a fresh secret DEFAULT_S_MOD_BITS
-    prime for THIS commit and uses it to build every batch's S grid. It is
-    deliberately not returned: nothing downstream needs it. S's own values
-    travel to ps6 in s_list, and both ms6 and ps6 feed those integers to
-    pow(S[j], d, mod) in the H-side ring, so s_mod is consumed here and
-    never referenced again -- not by ps6, and certainly not by vs6, which
-    is never told it. That is what makes it a per-commit secret rather
-    than a parameter the verifier has to share. Pass an explicit s_mod
-    only to pin it (e.g. reproducing a commit in a test).
+    s_mod=None (the default) builds every batch's S grid in DEFAULT_S_MOD,
+    the same unknown-order composite the H side uses. It is deliberately not
+    returned and not placed in params: nothing downstream needs it. S's own
+    values travel to ps6 in s_list, and both ms6 and ps6 feed those integers
+    to pow(S[j], d, mod) in the H-side ring, so how S was derived never
+    enters the check -- ps6 does not need s_mod, and vs6 is never told it.
+    Pass an explicit s_mod to use a different ring (e.g. pinning one to
+    reproduce a commit in a test).
 
     workers>1 parallelizes ACROSS batches when there's more than one --
     each batch's own commit is fully independent (same shared `s` as
@@ -553,11 +583,11 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     """
     hmax = pad_size+int(str(ut.hash(ut.hash(max(vals),s_exp))))
 
-    # One fresh secret prime per commit, shared by every batch's S grid --
-    # generated here rather than inside _ms6_batch so a many-batch commit
-    # pays for it once, not per batch.
+    # S's ring: the shared unknown-order composite, not a per-commit prime.
+    # See DEFAULT_S_MOD for why the per-commit secret was given up for
+    # hardness, and why the two cannot both be had.
     if s_mod is None:
-        s_mod = ut.generate_prime(DEFAULT_S_MOD_BITS)
+        s_mod = DEFAULT_S_MOD
 
     if s is None:
         s = gen.randrange(hmax)
@@ -578,15 +608,17 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futures = [
-                ex.submit(_ms6_batch, vals[start:start + batch_size], chunk_size, d, q,
-                          s, s_exp, mod, s_mod, keep_hm, 1, batch_index)
+                ex.submit(_ms6_batch, vals[start:start + batch_size], chunk_size, d, q, s,
+                          s_exp=s_exp, mod=mod, s_mod=s_mod, s_q=s_q, keep_hm=keep_hm,
+                          workers=1, batch_index=batch_index)
                 for batch_index, start in enumerate(starts)
             ]
             batch_results = [f.result() for f in futures]
     else:
         batch_results = [
-            _ms6_batch(vals[start:start + batch_size], chunk_size, d, q, s, s_exp,
-                       mod=mod, s_mod=s_mod, keep_hm=keep_hm, workers=workers, batch_index=batch_index)
+            _ms6_batch(vals[start:start + batch_size], chunk_size, d, q, s, s_exp=s_exp,
+                       mod=mod, s_mod=s_mod, s_q=s_q, keep_hm=keep_hm, workers=workers,
+                       batch_index=batch_index)
             for batch_index, start in enumerate(starts)
         ]
 
@@ -738,8 +770,8 @@ class Commitment:
 
     def __init__(self, vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
                  chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE, mod=DEFAULT_MOD,
-                 s_mod=None, workers=DEFAULT_WORKERS, batch_salts=None,
-                 seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+                 s_mod=None, s_q=DEFAULT_S_Q, workers=DEFAULT_WORKERS,
+                 batch_salts=None, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
         """batch_salts pins each batch's salt instead of drawing fresh ones.
         Only for reproducing a commitment (the incremental-vs-from-scratch
         equivalence test relies on it); leave it None in normal use."""
@@ -751,9 +783,13 @@ class Commitment:
         self.chunk_size, self.batch_size = chunk_size, batch_size
         self.mod, self.workers = mod, workers
         self.seal_batch_size = seal_batch_size
+        # captured, not re-read from the constant: a changed DEFAULT_S_Q
+        # would otherwise rebuild S differently on the next reseal and
+        # invalidate this commitment.
+        self.s_q = s_q
 
         hmax = pad_size + int(str(ut.hash(ut.hash(max(vals), s_exp))))
-        self.s_mod = ut.generate_prime(DEFAULT_S_MOD_BITS) if s_mod is None else s_mod
+        self.s_mod = DEFAULT_S_MOD if s_mod is None else s_mod
         if s is None:
             s = gen.randrange(hmax)
         self.s = s
@@ -831,9 +867,10 @@ class Commitment:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=self.workers) as ex:
             futures = [
-                ex.submit(_ms6_batch, group, self.chunk_size, self.d, self.q,
-                          self.s, self.s_exp, self.mod, self.s_mod, True, 1,
-                          b0 + i, salts[i])
+                ex.submit(_ms6_batch, group, self.chunk_size, self.d, self.q, self.s,
+                          s_exp=self.s_exp, mod=self.mod, s_mod=self.s_mod,
+                          s_q=self.s_q, keep_hm=True, workers=1,
+                          batch_index=b0 + i, batch_salt=salts[i])
                 for i, group in enumerate(batch_groups)
             ]
             results = [f.result() for f in futures]
@@ -904,7 +941,8 @@ class Commitment:
 
     def _reseal(self, b):
         h, S = _seal_grid(self.cntH[b], self.cntS[b], self._s0(b), self.chunk_size,
-                          self.d, self.q, self.mod, self.s_mod, self.workers)
+                          self.d, self.q, self.mod, self.s_mod, self.workers,
+                          self.s_q)
         self.h_list[b], self.s_list[b] = h, S
 
     def _rebuild_tree(self):

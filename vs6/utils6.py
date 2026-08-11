@@ -92,17 +92,11 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # price of the hardness.
 DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
-# Superseded moduli, retained so commitments produced under them still
-# verify: ms6() records the modulus it used in its returned params, and
-# ps6/vs6 read it from there rather than from this default. Both are PRIMES,
-# and neither offers root-extraction hardness -- see DEFAULT_MOD above.
-#
-#   LEGACY_MOD_256   the 256-bit fingerprinting prime (sized for collision
-#                    resistance only; fast, but roots are extractable)
-#   LEGACY_MOD_2048  the original 2048-bit prime
-LEGACY_MOD_256 = 0xbb451c13c2c59bc9e400ec787e175266aa806d1ff7382aceda7c98501b848ce5
-
-LEGACY_MOD_2048 = 0xd5fffd2fb08d20c26c48fbbe28a4318db27be5a781b4a22f97c579b997eb652b51c28d75143726a073190b0cd9185446bc036472f191d5d06f5bfb2469dae20c6f42792962b6fb4eab3965b42cf33247f19bd6049c0e9840d7425fe36828b1466d29deec081b067c460304be3cb43be254eb7459a3b8d19de2b77ccad491d3da27eaa807c9c921e4654627ba807c5c9c47f9f28f84f18e70d743718e5f08a692edc4665ee006555579e9af611b2575dd95668c24ccb49a6794e2f9b96b3d660d2ff544513289efe44bef4c78e5a62397efbd75069b80588c4abdee63bcfc43eb2355e3a95224a4bc57b79991038b491904aa163119739223e39f9982eee69b05
+# NOTE on older commitments: no constant is kept here for the primes this
+# replaced. None is needed -- ms6() records the modulus it used in the
+# params dict it returns, and ps6/vs6 read it from there, so a commitment
+# made under any earlier modulus still verifies from its own params. A
+# caller reproducing one just passes mod=<that value> explicitly.
 
 _PLANES = {}
 _POWSET = None
@@ -346,9 +340,12 @@ class Utils:
 
     def mul_combinations_mod(self, N, ps, vals, mod):
         """Modular counterpart of mul_combinations -- see ms6/utils6.py's copy
-        for the full KNOWN LEAK docstring (idx=0/1/N*(L-1)-1/N*(L-1) are
-        singleton buckets, leaking 4 real columns per row via modular root
-        extraction; a documented, accepted tradeoff, not fixed here)."""
+        for the full KNOWN LEAK docstring. In short: idx=0/1/N*(L-1)-1/
+        N*(L-1) are singleton buckets holding raw per-column values. Reading
+        them back means extracting an N-th root mod `mod`, which is free if
+        `mod` is prime and is the RSA problem if it is a composite of
+        unknown order -- as DEFAULT_MOD now is. The buckets are structural;
+        what the modulus decides is whether they can be inverted."""
         L = len(vals)
 
         powers = [[1] * (N + 1) for _ in range(L)]

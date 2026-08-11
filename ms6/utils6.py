@@ -64,17 +64,11 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # price of the hardness.
 DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
-# Superseded moduli, retained so commitments produced under them still
-# verify: ms6() records the modulus it used in its returned params, and
-# ps6/vs6 read it from there rather than from this default. Both are PRIMES,
-# and neither offers root-extraction hardness -- see DEFAULT_MOD above.
-#
-#   LEGACY_MOD_256   the 256-bit fingerprinting prime (sized for collision
-#                    resistance only; fast, but roots are extractable)
-#   LEGACY_MOD_2048  the original 2048-bit prime
-LEGACY_MOD_256 = 0xbb451c13c2c59bc9e400ec787e175266aa806d1ff7382aceda7c98501b848ce5
-
-LEGACY_MOD_2048 = 0xd5fffd2fb08d20c26c48fbbe28a4318db27be5a781b4a22f97c579b997eb652b51c28d75143726a073190b0cd9185446bc036472f191d5d06f5bfb2469dae20c6f42792962b6fb4eab3965b42cf33247f19bd6049c0e9840d7425fe36828b1466d29deec081b067c460304be3cb43be254eb7459a3b8d19de2b77ccad491d3da27eaa807c9c921e4654627ba807c5c9c47f9f28f84f18e70d743718e5f08a692edc4665ee006555579e9af611b2575dd95668c24ccb49a6794e2f9b96b3d660d2ff544513289efe44bef4c78e5a62397efbd75069b80588c4abdee63bcfc43eb2355e3a95224a4bc57b79991038b491904aa163119739223e39f9982eee69b05
+# NOTE on older commitments: no constant is kept here for the primes this
+# replaced. None is needed -- ms6() records the modulus it used in the
+# params dict it returns, and ps6/vs6 read it from there, so a commitment
+# made under any earlier modulus still verifies from its own params. A
+# caller reproducing one just passes mod=<that value> explicitly.
 
 # hash() (below) evaluates sum_e powset[digit_e][k-1] * 10**e over the
 # decimal digits of val. A digit can only take 10 values, so the
@@ -466,15 +460,29 @@ class Utils:
         eval_level_mod's bucket order the same way mul_combinations lines
         up with eval_level's).
 
-        KNOWN LEAK (documented, not fixed; corrected count -- see
-        check_leak.py): idx=0 and idx=N*(L-1) (choosing one column with
-        full multiplicity N -- the two combinatorial extremes) are each
-        realized by exactly one combo, so their `ps` buckets hold a single
-        raw pow(combined[0], N, mod) / pow(combined[L-1], N, mod) term.
-        Since N and mod are public, each is invertible via modular root
-        extraction whenever gcd(N, mod-1)==1 (generically true, checked
-        directly), recovering combined[0] and combined[L-1] = row[j]*
-        S[j]**d for those 2 edge columns directly.
+        KNOWN LEAK -- STRUCTURAL, still present; its exploitability now
+        depends on the modulus (corrected count -- see check_leak.py):
+        idx=0 and idx=N*(L-1) (choosing one column with full multiplicity
+        N -- the two combinatorial extremes) are each realized by exactly
+        one combo, so their `ps` buckets hold a single raw
+        pow(combined[0], N, mod) / pow(combined[L-1], N, mod) term.
+
+        Whether that is *invertible* is now a property of `mod`, and this
+        changed when DEFAULT_MOD became a composite of unknown order:
+
+          * mod PRIME (the old default, and still the case if a caller
+            passes one): the group order is public, so the attacker
+            computes N^-1 mod (p-1) and recovers combined[0] and
+            combined[L-1] = row[j]*S[j]**d outright -- efficient at any
+            prime size, measured at ~33 ms against a 2048-bit prime.
+          * mod COMPOSITE of unknown order (the current DEFAULT_MOD, the
+            RSA-2048 challenge number): phi(n) is unknown, so there is no
+            exponent to invert and extracting the N-th root is the RSA
+            problem. The bucket still holds the value; reading it back
+            requires factoring the modulus.
+
+        So the enumeration below is unchanged -- what changed is that the
+        singleton buckets are no longer a free read.
 
         That's not the whole leak, though: idx=1 and idx=N*(L-1)-1 are
         *also* singleton buckets (combo (0,...,0,1) and its mirror), and

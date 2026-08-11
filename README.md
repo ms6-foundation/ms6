@@ -27,7 +27,7 @@ tests/                     49 checks; exits non-zero on failure
   test_sealtree.py           the cached fold tree
   test_params.py             the parameter contract and its enforcement
   test_parity.py             prover/verifier duplicated-copy parity
-  test_modulus.py            modulus sizing + legacy backward compatibility
+  test_modulus.py            modulus must stay composite; not baked in
   test_sizing.py             x-sizing determinism, parallel construction
   test_completeness.py       sweep over the workers>1 batch-routing path
   test_adversarial.py        tamper / forge / equivocation attempts
@@ -124,19 +124,29 @@ exercises.
 
 Honest limitations, since this is a prototype:
 
-- **Known information leak.** `mul_combinations_mod`'s combinatorial bucketing
-  has singleton buckets at the extremes, invertible by modular root extraction,
-  recovering a handful of real columns per row. Documented in the source, not
-  fixed. Closing it needs a modulus of *unknown order* (RSA modulus or class
-  group): root extraction is efficient mod a prime at any size, so no parameter
-  choice fixes it.
+- **A structural leak, whose exploitability now rests on factoring.**
+  `mul_combinations_mod`'s combinatorial bucketing has singleton buckets at the
+  extremes that hold raw per-column values. Reading one back means extracting a
+  d-th root mod `mod`. That is free mod a prime, because the group order is
+  public — measured at ~33 ms against a 2048-bit prime, and widening the prime
+  bought nothing. `DEFAULT_MOD` is therefore the **RSA-2048 challenge
+  composite**: with φ(n) unknown there is no exponent to invert, so the read
+  becomes the RSA problem. The buckets are still there; what changed is that
+  they are no longer a free read.
+- **That rests on a trust assumption.** RSA-2048's factors are believed unknown
+  because RSA Security says it generated and destroyed them. That is far
+  stronger than a locally generated modulus — where whoever ran the generator
+  could have kept `p, q` and could forge — but it is not zero-trust. Only a
+  class group removes the trusted party entirely, at the cost of slower
+  arithmetic and a less familiar assumption.
 - **The `h == c` check is probabilistic**, not exact — distinct values collide
-  with probability ~1/`mod`. `DEFAULT_MOD` is 256-bit, giving ~2⁻²⁵⁶ against
-  honest error and ~2¹²⁸ birthday work for an adversary. `LEGACY_MOD_2048` is
-  retained so commitments made under the previous modulus still verify.
-- **No formal proof** of binding or hiding. The blinding, column permutation
-  and row-sealing each close a specific attack found during development; that
-  is not a security argument.
+  with probability ~1/`mod`, negligible at 2048 bits. The modulus is not baked
+  in: `ms6()` records the one it used in `params` and `ps6`/`vs6` read it from
+  there, so commitments made under any earlier modulus still verify from their
+  own `params`.
+- **No formal proof** of binding or hiding. The blinding, column permutation,
+  row-sealing and unknown-order modulus each close a specific attack found
+  during development; that is not a security argument.
 - **`hash()` is a custom digit-substitution function**, not a standard
   cryptographic hash.
 
@@ -152,7 +162,7 @@ python3 -m tests.test_parity     # one group on its own
 
 49 checks covering the round trip, updatability (append/replace/delete), the
 cached fold tree, the parameter contract and its enforcement, modulus sizing
-and backward compatibility, prover/verifier copy parity, a sweep over the
+and modulus-independence, prover/verifier copy parity, a sweep over the
 parallel batch-routing path, and an adversarial suite (tampered values,
 wrong-index substitution, fabricated values, cross-batch swaps, iset/proof
 mismatch, and hm equivocation at both claimed and unclaimed positions). Exits non-zero on
