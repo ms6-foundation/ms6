@@ -933,7 +933,7 @@ applications running clean end-to-end.
 
 ---
 
-# Part D — params dict, stage 3 (delete), modulus resize, and the ePrint paper
+# Part D — params dict, stage 3 (delete), and the modulus resize
 
 ### Environment
 
@@ -998,32 +998,6 @@ open items at once.
 applications updated to the new params-dict API and to demonstrate
 `delete()` (a departed employee, a cleared watchlist customer), and both
 re-run clean end-to-end.
-
----
-
-## 30. IACR ePrint-format spec paper
-
-**Request** — *please draft a formal spec doc in the format acceptable by
-IACR ePrint preprint.*
-
-Followed a request for publication recommendations (discussed but not
-requested as a written deliverable). Wrote `ms6_eprint.tex` — LaTeX article
-class, no `algorithm`/`algorithmic` packages available in the sandbox's TeX
-Live install, so pseudocode is `description`/`enumerate` + display math
-instead. Contents: the full construction, Theorem 1 (completeness, proved),
-a heuristic (not formally reduced) binding argument, the two-query
-differencing attack as Attack 6.4/Theorem 6.5 with a full proof, a
-mitigations-don't-work subsection explaining why sealing `S` (entries
-12–14/25) doesn't close the leak, and 7 open problems — including the
-unknown-order-modulus direction from entry 27.
-
-One duplicate-`\label{}` collision (the "Opening" subsection and the "Open
-problems" section both used `sec:open`) caught and fixed via two more
-compile passes. Compiles clean: 0 warnings, 0 errors, 16 pages.
-
-**Known stale spot, flagged and not yet updated:** still cites the old
-2048-bit `DEFAULT_MOD` in its parameter table and a remark, since entry 29's
-resize landed after the paper was drafted.
 
 ---
 
@@ -1178,23 +1152,15 @@ Run after entries 31–33 landed:
   the same data, and no longer able to silently truncate an over-wide
   item), a width guard on `append()`/`replace()`, and batch-level-parallel
   initial construction for `Commitment` matching `ms6()`'s own.
-- **`ms6_eprint.tex` / `ms6_eprint.pdf`** — the formal spec paper (entry 30),
-  compiling clean at 16 pages. `DEFAULT_MOD` references now read 256-bit
-  throughout (entry 34); the efficiency table's absolute timings are
-  flagged in-text as measured under the prior 2048-bit modulus and not
-  re-run at the smaller size. Byline is now Ayaz Mumtaz, no affiliation,
-  no repository link.
 - **`zk_payroll_demo.py`** / **`zk_sanctions_screening_scale_demo.py`** — both
   demonstrate the full commit/prove/verify flow plus all three updatability
   stages, narrated in-domain (HR payroll audit; sanctions-screening
   registry).
 
-## 34. `vsum_level_fold_mod` swap + `ms6_eprint` byline/`DEFAULT_MOD` sync
+## 34. `vsum_level_fold_mod` swap
 
 **Request** — replace `ms6.py`'s remaining direct `vsum_level_mod` calls with
-`vsum_level_fold_mod`; set the `ms6_eprint` byline to Ayaz Mumtaz (with
-contact address) and no affiliation or repository link; close out any
-already-resolved Open Items.
+`vsum_level_fold_mod`; close out any already-resolved Open Items.
 
 ### What changed
 
@@ -1208,68 +1174,14 @@ already-resolved Open Items.
   `ms6.py`'s own `__main__` (comparing `utils6` against
   `verifier_utils6`) are untouched — they test something else entirely
   (the two files staying in sync), not this call-site choice.
-- `ms6_eprint.tex`'s `\author` block now reads `Ayaz Mumtaz` with the
-  contact address, no affiliation line, no repository placeholder.
-- Closed the `DEFAULT_MOD` sync-pass item: the parameter table now reads
-  256-bit; the efficiency section's "Default parameters" line is relabeled
-  as the parameters *at the time of that measurement* (2048-bit, prior to
-  the entry-29 resize) with an explicit note that the table hasn't been
-  re-run at the current 256-bit default; and the root-extraction timing
-  demo was re-measured against the actual current `DEFAULT_MOD` (256-bit):
-  **0.1 ms** average over 200 trials, down from the previously-recorded
-  39 ms at 2048-bit — reinforcing rather than weakening the paper's point,
-  since a smaller modulus makes root extraction cheaper, not harder.
 
 ### Verified
 
 - `ms6.py`'s own `__main__` suite: all checks PASS after the call-site
   swap (updatability, params, copy-parity, x-sizing, parallelism), no
   regressions.
-- `ms6_eprint.tex` recompiles clean (pdflatex, 2 passes, 0 errors, 16
-  pages).
 - Root-extraction re-measurement done against the live `utils6.DEFAULT_MOD`
   (confirmed 256-bit, prime) in this session, not copied from memory.
-
----
-
-## 35. Repository link, deletion section, and closing Open Problem 11.5 (Deletion)
-
-**Request** — add the repository URL to `ms6_eprint`'s byline; write up
-tombstone-based deletion as a real section (it's already implemented and
-tested, entries in Part D/E's stage-3-delete suite), and remove the
-now-stale "Open Problem (Deletion)" that asked for exactly that.
-
-### What changed
-
-- `ms6_eprint.tex`'s `\author` block gained a third line,
-  `https://github.com/ms6-foundation/ms6`.
-- Added `\subsection{Deletion}` (\S8.3) to the Updatability section,
-  describing `Commitment.delete()`'s actual tombstoning mechanism (blank
-  the slot, subtract its rows from the batch counts, never shift a later
-  index) and why it's address-preserving rather than compacting. Added
-  Proposition 8.2 (Deletion is exact, not compaction) with a proof sketch
-  reusing the same additive-counts argument as Theorem 8.1, formalizing
-  the `Commitment.delete()` docstring's own claim: `replace(i, X)` then
-  `delete(i)` lands on the same commitment as `delete(i)` alone, but a
-  tombstoned commitment is *not* bit-identical to a from-scratch commit
-  over the survivors (batches don't compact). Listed the same empirical
-  checks the stage-3-delete suite already covers (pre-delete proof
-  rejected, survivors unaffected, replace-then-delete == delete, emptied
-  batch still verifies, append lands past tombstones, double-delete/
-  revive/range guarded).
-- Removed the "Deletion" Open Problem (was 11.5, asking for exactly the
-  section just added); remaining open problems renumbered automatically
-  (11.1–11.7, was 11.1–11.8). Updated the Contributions paragraph and the
-  Motivation subsection to mention deletion alongside append/replace.
-
-### Verified
-
-- Checked no other cross-reference in the document pointed at the removed
-  `op:delete` label (none did — the one nearby "Open Problem 11.5" text
-  reference is to cross-implementation equivalence, a different, unmoved
-  label, unaffected by the removal).
-- Recompiled clean: pdflatex, 2 passes, 0 errors, 0 undefined references,
-  17 pages (was 16).
 
 ---
 
@@ -1330,90 +1242,244 @@ unknown order.
   prime's cost, as expected (modexp cost tracks bit length, not
   primality): commit 1.24s, prove 0.76s avg, verify 0.09s avg -- versus
   0.99s / 64ms / 34ms at the (now legacy) 256-bit prime.
-- Not done this turn: `ms6_eprint.tex` still describes the DEFAULT_MOD as
-  the 256-bit prime throughout (Parameters table, Efficiency section,
-  Remark on mod-not-hidden, the Open Problem this change addresses) --
-  the paper's narrative is now stale relative to the code and needs its
-  own pass if the user wants it reconciled.
 
 ---
 
-## 37. Reconcile `ms6_eprint.tex` with the entry-36 `DEFAULT_MOD` change
+## 38. Two-armed leak test (`tests/test_leak.py`)
 
-**Request** — "Update the open items list in the paper and also update
-the Efficiency section." Brings the paper's narrative back in step with
-entry 36's code change.
+**Request** — "any recommendation to resolve open items given in the
+ms6_vibe.md file", then "please build two-armed leak test".
+
+The entry-36 open item said the root-extraction leak "should" be closed by
+the unknown-order modulus but had never been re-run numerically. The gap
+was not just the missing run -- it was that a single "we ran the attack and
+it failed" result is unfalsifiable. It is equally consistent with the
+modulus closing the leak, with the attack code being broken, and with
+parameters having drifted so the attack no longer applies.
 
 ### What changed
 
-- Parameters table (\S3): `p`/`DEFAULT_MOD` row rewritten to describe the
-  current RSA-2048 Factoring Challenge composite, noting the two prior
-  defaults (256-bit prime, 2048-bit prime) as history.
-- Remark on mod-not-hidden: reframed from "`p` is a public prime" (no
-  longer true) to explaining why *any* prime lacks root-extraction
-  hardness regardless of size, with a closing sentence pointing at the
-  now-implemented fix.
-- \S"Toward a fix": the closing "We have not implemented either
-  option" replaced with a paragraph describing what was implemented (the
-  RSA-2048 challenge modulus, chosen specifically to avoid the section's
-  own "obvious wrong fix" trapdoor risk), what was verified (full
-  regression suite, unchanged), and what was not (re-running the
-  differencing attack itself against the new modulus, since that
-  scratch script isn't part of the current file set) -- narrowing rather
-  than closing the open problem.
-- Related Work: one clause fix ("and currently missing" -> "and now
-  uses"), since it directly contradicted the paragraph above.
-- Open Problems (\S"Open problems"): `op:leak2` retitled "Verify the leak
-  is closed" (was "Close the leak") and reworded from "implement and
-  verify" to describing the implementation as done and narrowing the
-  problem to the numerical re-verification step.
-- Efficiency section: rewrote the intro paragraph, the main table (now
-  "current 2048-bit unknown-order composite" vs "previous 256-bit prime,
-  legacy" instead of "256-bit vs 2048-bit-prime legacy"), and the closing
-  root-extraction-context paragraph. New numbers from a fresh
-  `_bench_compare.py`-style run (same methodology, both moduli in one
-  process, 120,000-record registry): commit 1.25s vs 1.04s, prove 768ms
-  vs 64ms avg, verify 90ms vs 35ms avg, build 0.17s vs 0.13s, append
-  11.3ms vs 9.8ms, replace 19.7ms vs 12.1ms (current vs previous). Ratios
-  are the near-mirror image of entry 34's 2048-to-256-bit speedup, as
-  expected -- modexp cost tracks bit length, not primality.
-- Table width fix: the new table's r-columns had long headers ("Current
-  (2048-bit, unknown order)" etc.) and overflowed the page the same way
-  the original table did before its own column-width fix; shortened the
-  headers and gave all four columns fixed `p{}` widths.
+- New `tests/test_leak.py` mounts the *same* attack twice in one run, so
+  only the modulus differs between the arms:
+  - **ARM 1 (positive control)** -- a freshly generated 256-bit prime with
+    `gcd(d, p-1) == 1`. The order is public, the d-th root is unique and
+    computable as `pow(y, d^-1 mod (p-1), p)`. This MUST SUCCEED. A red
+    here means *this test* is broken, and arm 2 is uninterpretable.
+  - **ARM 2** -- the shipped `DEFAULT_MOD`. `phi(n)` is unknown, so there
+    is no exponent to invert. This MUST NOT recover the column.
+  - A third check asserts the two arms genuinely *differ*, so the
+    comparison cannot go vacuous if both silently start failing.
+- The test also asserts, deliberately, that the singleton buckets still
+  **hold** `combined[0]**d` under *both* moduli. The leak was never
+  removed; only its price changed, from one modular exponentiation to
+  factoring a 2048-bit composite. Asserting the bucket contents keeps the
+  log's claim honest.
+- The lasting value is the reverse direction: if a known-order modulus ever
+  goes back into `DEFAULT_MOD`, arm 2 starts succeeding and the suite fails
+  loudly instead of the leak reopening in silence.
 
 ### Verified
 
-- Digits of the RSA-2048 challenge number cross-checked against two
-  independent sources (Wikipedia's "RSA numbers" article, a general web
-  search) before use in entry 36; not re-verified here, only cited.
-- Recompiled clean: pdflatex, 2 passes, 0 errors, 0 undefined references,
-  18 pages (was 17). Remaining overfull-hbox warnings (4, at lines
-  62-63/352-358/1067-1072/1095-1107) are pre-existing and unrelated to
-  this turn's edits -- confirmed by diffing against the pre-edit warning
-  list, same count, same locations modulo line-number drift.
+- Arm 1 recovers the column exactly; arm 2 does not. Both bucket-contents
+  checks hold. 5 new checks, suite at 57.
+- One self-inflicted bug found and fixed: ARM 2's label originally
+  contained the word "FAILS", which made a CI-style `grep -c FAIL` on the
+  output false-positive on a *passing* run. Reworded.
 
-### Still open
+---
 
-- The numerical re-verification itself (Open Problem `op:leak2` as
-  narrowed): re-running the differencing attack's extraction against the
-  new modulus to confirm it no longer recovers digits. The attack
-  reproduction from entry 23 is not part of the current `ps4work/` file
-  set.
+## 39. `docs/ms6_eprint_v2.tex`
+
+**Request** — "what are the open items left in the ms6_eprint? Any
+suggestion to resolve those open items", then "Please create another
+version of ms6_eprint based on the current state of the ms6 project."
+
+The original write-up predated the params-dict contract, the tombstone
+deletion path, the cached seal tree, the unknown-order modulus and the
+tests package, so several of its open problems had since been closed in
+code and several of its descriptions no longer matched what runs.
+
+### What changed
+
+- New `docs/ms6_eprint_v2.tex` written against the current tree rather than
+  edited from the old one. Open problems went from 11 to 6 -- the ones
+  removed were closed by later entries, not waved away.
+- Added a section on what the unknown-order modulus does and does not
+  supply, which is what set up entry 40.
+- `docs/` is gitignored (the `.tex` is a working artefact, not shipped
+  code), and the earlier log entries that tracked `ms6_eprint.tex` edits
+  were removed from this file at the user's request.
+
+---
+
+## 40. The binding challenge: the accumulator was not injective
+
+**Request** — the user pushed back on the framing in the paper: "The
+purpose of the ut.hash is not create the digest of the values but to
+explode the digits of the values for the accumulator to perform the grid
+multiplications. The security of the protocol is based on unknown order
+modulus ring, is that not sufficient enough for the binding and hiding of
+the proof."
+
+This was right on two of three points and the third is what mattered.
+
+### Findings
+
+- **Right about the hash's role.** `ut.hash` is a digit-exploder feeding
+  the grid, not a security digest. The paper had been describing it as
+  though collision resistance of the hash carried weight it does not carry.
+- **Right about hiding.** The unknown-order ring is what supplies hiding;
+  entry 38 is the standing evidence.
+- **Wrong about binding, and the counterexample was cheap.** Binding needs
+  the exponent map to be *injective*. It was not. `cell_product_mod` raised
+  each digit to its own count and multiplied, so the digit *was* the base
+  -- and composite digits factor into smaller ones:
+
+      {6}       == {2,3}
+      {4}       == {2,2}
+      {9}       == {3,3}
+      {8}       == {2,2,2}
+      {1,1,1,6} == {2,3}        (1 contributes nothing)
+
+  This is the RSA-accumulator condition: strong-RSA collision resistance
+  presumes an injective exponent map, and an unknown-order ring cannot
+  supply injectivity that the encoding threw away before the modulus was
+  ever applied.
+- Escalated the counterexample from cells to the top: constructed two
+  **different batches** that produce a byte-identical commitment. That is a
+  binding break, independent of the modulus.
+
+The `.replace('0','1')` rewrite in `_item_rows` was a symptom of the same
+root cause -- 0 was rewritten because a zero base annihilates a product,
+which is only a problem when the digit is the base.
+
+---
+
+## 41. Prime-digit encoding
+
+**Request** — "What is the better strategy to replace the '0' before
+accumulation performs the grid multiplication. What other prime values we
+can use instead of the (cell value = 2^e2 3^e3 5^e5 7^e7, so a cell is four
+integers) so that accumulator does bind the digit grid", then "Yes, please
+prototype these changes and run the suite plus the leak test against it."
+
+### What changed
+
+- Each decimal digit now indexes its **own** prime, so the exponent map is
+  injective by unique factorisation:
+
+      DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
+      #               0  1  2  3   4   5   6   7   8   9
+
+  Ten primes, not four. The four-prime layout (`2^e2 3^e3 5^e5 7^e7`) was
+  compact precisely because 4, 6, 8 and 9 collapsed onto 2 and 3 -- that
+  compactness *was* the collision.
+- `cell_product`, `cell_product_mod`, `cell_pow_product` and
+  `cell_pow_product_mod` now loop `for v in range(10)` over
+  `DIGIT_PRIMES[v]`, in both the `ms6` and `vs6` copies.
+- **Padding gets its own non-contributing slot.** With every digit carrying
+  information, `'1'` can no longer double as filler. `PAD = ':'`
+  (`chr(58)`, one past `'9'`) maps to `PAD_SLOT = 10`, which contributes
+  nothing to the product. `Acc.cnt` widened from `[0]*10` to `[0]*11`.
+- `_item_rows` no longer does `.replace('0','1')`, and `chunk_of` pads with
+  `u.PAD` rather than spaces/zeros.
+- `vs6`'s `interlace_mod` needed a `base()` helper -- it had still been
+  using the digit itself as the base, which threw
+  `ValueError: invalid literal for int() with base 10: ':'` the moment the
+  pad character reached it. `_vs6_batch` also had to pass digit *strings*
+  rather than ints, or leading zeros were dropped.
+
+### Verified — 2026-08-11
+
+- Full suite: **exit 0, 57 checks**. Both example applications: exit 0.
+- Leak test still separates: arm 1 recovers, arm 2 does not.
+- Split identity `cell(A u B) == cell(A) * cell(B)` survives the encoding
+  change -- 200 randomised trials.
+- The specific collisions from entry 40 no longer collide, and the two
+  batches that produced an identical commitment now produce different ones.
+- **Cost.** Isolated cell products are ~2.1x slower (ten bases instead of
+  four, larger primes). End to end it is essentially free: at 1000 items,
+  commit 0.14s -> 0.15s, prove 2.07s -> 2.06s. The grid work is not where
+  the time goes.
+
+---
+
+## 42. Flattening the paper's history; stale-comment sweep
+
+**Request** — "Please remove the comparison between the [old] hashing and
+new hashing and only add new hashing algorithm to the paper, as the paper
+has not yet published (don't need to track the changes)", then "Flattened
+those too", then "Cleanup the comments to remove any stalled comments."
+
+- `ms6_eprint_v2.tex` now presents the prime-digit encoding as the design,
+  with no old-vs-new framing anywhere. The *justification* for ten distinct
+  primes stayed (as `rem:prime-table`) -- that is not history, it is the
+  reason the encoding is shaped this way, and dropping it invites someone
+  to "simplify" it back into the collision.
+- Same rule applied to code comments. Removed:
+  - the `col_digit_counts` rationale block describing the four-prime
+    factorisation and "four big-int powers per cell";
+  - `cell_product`/`cell_pow_product` docstrings in both packages;
+  - the `_s0_grid` and `_item_rows` comments phrased as "previously" /
+    "this replaces" / "no longer";
+  - a `COST:` note that still referenced the deleted `LEGACY_MOD_256`
+    (reworded: cost tracks the modulus's *width*, not its primality).
+- Kept the comments that document a **trap** rather than an edit -- why `x`
+  is sized from item-hash widths and not from the salt, why `_seal_mod`
+  takes bits and not decimal digits. Both of those were real bugs; the
+  comments are what stop them coming back.
+- One genuinely **stale piece of code**, not just a comment:
+  `tests/test_adversarial.py` was still building its forged rows with
+  `fake_h1s.replace('0','1')`, an encoding that no longer exists. Fixed in
+  both places.
+
+### A gap found while writing this up
+
+Drafting the open-items note, I wrote that the injectivity property was
+pinned by `test_adversarial` -- and it was not. Nothing in the suite
+guarded it. `test_parity` only checks that the `ms6` and `vs6` copies agree
+with each other, which a *colliding* encoding satisfies exactly as well.
+The property entry 41 was built to fix had no test.
+
+Added two checks to `test_adversarial`:
+
+- every collision from entry 40 (`{6}`/`{2,3}`, `{4}`/`{2,2}`, `{9}`/`{3,3}`,
+  `{8}`/`{2,2,2}`, `{1,1,1,6}`/`{2,3}`) must now separate;
+- exhaustively, no two distinct 4-digit multisets may share a cell value.
+
+### Verified — 2026-08-11
+
+- Suite after the sweep: **exit 0, 59 checks**. Both demos: exit 0.
+- Both new guards confirmed to fire: reverting `DIGIT_PRIMES` to a
+  collapsing layout turns them red (along with 7 downstream checks), and
+  restoring it returns the suite to green.
 
 ---
 
 # Open items
 
-- **The root-extraction leak itself (entry 23) is now closed at the
-  source, pending numerical re-verification (entries 27, 36, 37).**
-  Entries 12–14/25 seal the *value* that leaks (`S[j]`) behind a modulus
-  ring the verifier doesn't know; entry 36 additionally moved the H-side
-  ring itself off a public prime (known order) onto the RSA-2048
-  Factoring Challenge composite (unknown order), closing the
-  root-extraction step the entry-23 differencing attack depends on.
-  Structurally this should defeat the attack (root extraction needs a
-  known group order, which this modulus does not have), but the
-  entry-23 attack script has not been re-run against the new modulus to
-  confirm numerically -- that re-run is the last open step, tracked as
-  `ms6_eprint.tex`'s Open Problem "Verify the leak is closed."
+- **The root-extraction leak (entry 23) is closed at the source and now
+  verified numerically (entries 27, 36, 38).** Entries 12–14/25 seal the
+  *value* that leaks (`S[j]`) behind a modulus ring the verifier doesn't
+  know; entry 36 moved the H-side ring itself off a public prime (known
+  order) onto the RSA-2048 Factoring Challenge composite (unknown order),
+  closing the root-extraction step the entry-23 differencing attack
+  depends on. Entry 38's two-armed test supplies the missing measurement:
+  the same attack SUCCEEDS under a prime modulus (positive control) and
+  does not recover the column under the unknown-order default.
+
+  What remains is a **trust assumption, not a gap in the code**: the
+  singleton buckets still hold the values (asserted under both moduli,
+  deliberately). Only the price of reading them changed, and that price
+  rests on RSA-2048's factors being unknown -- RSA Security's word, not a
+  proof. Anyone uncomfortable with that should pass their own `mod`; the
+  modulus travels in `params` and nothing is baked in (`test_modulus`).
+
+- **Binding now rests on the encoding, not on the modulus (entries
+  40–41).** The unknown-order ring supplies hiding but cannot supply
+  injectivity that the encoding threw away first; `DIGIT_PRIMES` restores
+  it by unique factorisation. This is the property to protect in any
+  future change to the grid layout -- a "compact" re-encoding that maps
+  two digits onto the same prime reopens a binding break, and it will not
+  show up as a test failure anywhere except in the specific collisions
+  `test_adversarial` pins.

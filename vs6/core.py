@@ -126,9 +126,14 @@ def unpack_params(params, expect=None):
 
 
 def chunk_of(val, iden, x, chunk_size):
+    """Digit rows for one value. Short first chunks and missing rows are
+    filled with u.PAD, which occupies its own count slot and contributes no
+    prime -- padding is deterministic and public, so it must not affect the
+    cell value. It cannot be a decimal digit: every digit indexes a prime
+    and therefore carries information."""
     chunks = list(ut.backward_chunk(val, chunk_size))
-    chunks[0] = f"{chunks[0]:1>{chunk_size}}"
-    return [iden] * (x - len(chunks)) + chunks
+    chunks[0] = f"{chunks[0]:{u.PAD}>{chunk_size}}"
+    return [u.PAD * chunk_size] * (x - len(chunks)) + chunks
 
 
 def chunks(iden, x, chunk_size):
@@ -158,19 +163,29 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None):
     so M's columns line up with the same real digit positions ps6's
     row[j]/S[j] do.
     """
-    iden = f"{'':1>{chunk_size}}"
+    iden = u.PAD * chunk_size
     chunk_of = chunks(iden, x, chunk_size)
 
     def rows_of(val):
-        rows = chunk_of(_s(val))[:x]
+        # val is already a digit string: routing it through int() would
+        # discard leading zeros, which now index a prime like any other digit
+        rows = chunk_of(val)[:x]
         return [_permute_row(r, perm) for r in rows] if perm is not None else rows
 
+    def base(ch):
+        """Digit -> its own prime; padding -> 1 (contributes nothing).
+
+        Must mirror utils6.cell_product_mod's encoding exactly: M is
+        multiplied against the opener's row[j], and the two only cancel if
+        both raise the SAME base for a given digit."""
+        return 1 if ch == u.PAD else u.DIGIT_PRIMES[int(ch)]
+
     H = rows_of(hm[0])
-    H = [[pow(c, k1, mod) for c in map(int, H1)] for H1 in H]
+    H = [[pow(base(ch), k1, mod) for ch in H1] for H1 in H]
     for val in hm[1:]:
         for row, H1 in zip(H, rows_of(val)):
             for j, ch in enumerate(H1):
-                row[j] = (row[j] * pow(int(ch), k1, mod)) % mod
+                row[j] = (row[j] * pow(base(ch), k1, mod)) % mod
 
     return H
 
@@ -199,11 +214,10 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
 
     FLUSH = 4096
     accH = u.Acc(x, chunk_size)
-    iden = f"{'':1>{chunk_size}}"
+    iden = u.PAD * chunk_size
     chunk_of = chunks(iden, x, chunk_size)
     for t, val in enumerate(vals):
-        h1s = _s(ut.hash(val, 1))
-        hm1 = chunk_of(h1s.replace('0', '1'))
+        hm1 = chunk_of(_s(ut.hash(val, 1)))
         accH.add(hm1)
         if (t & (FLUSH - 1)) == FLUSH - 1:
             accH.flush()
@@ -253,7 +267,7 @@ def _vs6_batch(ps, vals, x, chunk_size, d, workers=DEFAULT_WORKERS, mod=DEFAULT_
     # claimed iset items of digit_j**q -- exactly the factor ps6 deliberately
     # left out (see ps6's _ps6_batch docstring for why).
     if vals:
-        hm = [int(_s(ut.hash(val)).replace('0', '1')) for val in vals]
+        hm = [_s(ut.hash(val)) for val in vals]
         M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm)
     else:
         M = [[1] * chunk_size for _ in range(x)]

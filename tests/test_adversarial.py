@@ -122,7 +122,7 @@ def run(check):
     fake_h1s = M._s(M.ut.hash(fake_val))
     iden = f"{'':1>{chunk_size}}"
     x0 = x_list[0]
-    fake_hm_row = chunk_of(fake_h1s.replace('0', '1'), iden, x0, chunk_size)
+    fake_hm_row = chunk_of(fake_h1s, iden, x0, chunk_size)
     hm_list_fake[0][5] = fake_hm_row
     ps12 = ps6([5], h_list, hm_list_fake, s_list, params, workers=WORKERS)
     claims12 = {5: vals[5]}
@@ -144,12 +144,55 @@ def run(check):
     hm_list_fake2 = [list(hm_b) for hm_b in hm_list]
     fake_val2 = rnd.randrange(2**200)
     fake_h1s2 = M._s(M.ut.hash(fake_val2))
-    fake_hm_row2 = chunk_of(fake_h1s2.replace('0', '1'), iden, x0, chunk_size)
+    fake_hm_row2 = chunk_of(fake_h1s2, iden, x0, chunk_size)
     hm_list_fake2[0][12] = fake_hm_row2   # position 12: same batch (0) as claimed pos 5, itself unclaimed
     ps14 = ps6([5], h_list, hm_list_fake2, s_list, params, workers=WORKERS)
     claims14 = {5: vals[5]}
     expect_reject("hm[oset] tampered (unclaimed pos, same batch), claim true val elsewhere",
                   lambda: verify(claims14, ps14))
+
+    # 15. INJECTIVITY of the digit encoding. This is what binds the grid, and
+    # it is a property of the ENCODING, not of the modulus: an unknown-order
+    # ring cannot restore injectivity that the encoding discarded before the
+    # modulus was ever applied. Nothing else in the suite would catch a
+    # regression here -- test_parity only checks the two copies agree, which a
+    # colliding encoding satisfies just as well.
+    #
+    # The collisions below are the ones a digit-as-base product actually had.
+    # Each pair is (multiset A, multiset B) with A != B; the encoding must
+    # separate every pair.
+    collisions = [
+        ([6],       [2, 3]),        # 6 = 2*3
+        ([4],       [2, 2]),        # 4 = 2^2
+        ([9],       [3, 3]),        # 9 = 3^2
+        ([8],       [2, 2, 2]),     # 8 = 2^3
+        ([1, 1, 1, 6], [2, 3]),     # plus 1 contributing nothing
+    ]
+
+    def counts(digits):
+        c = [0] * 11
+        for dg in digits:
+            c[dg] += 1
+        return c
+
+    sep = all(M.ut.cell_product(counts(a), 1) != M.ut.cell_product(counts(b), 1)
+              for a, b in collisions)
+    check("adversarial   : digit encoding separates all known collisions "
+          "(binding depends on this, not on the modulus)", sep)
+
+    # and injectivity in the large: no two distinct 4-digit multisets may
+    # share a cell value
+    seen, injective = {}, True
+    for a in range(10):
+        for b in range(a, 10):
+            for c_ in range(b, 10):
+                for e in range(c_, 10):
+                    key = M.ut.cell_product(counts([a, b, c_, e]), 1)
+                    if key in seen:
+                        injective = False
+                    seen[key] = (a, b, c_, e)
+    check("adversarial   : no two distinct 4-digit multisets share a cell value",
+          injective)
 
 
 if __name__ == "__main__":

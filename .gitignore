@@ -11,5 +11,8 @@ dist/
 .venv/
 venv/
 
+# Docs (kept out of the repo: currently holds ms6_eprint.tex, the spec paper)
+docs/
+
 # OS
 .DS_Store
