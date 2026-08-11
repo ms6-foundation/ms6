@@ -26,8 +26,22 @@ def run(check):
                         mod=u.LEGACY_MOD_2048, s_mod=ut.generate_prime(256))
     check("modulus       : legacy 2048-bit commitment still verifies",
           legacy.params["mod"] == u.LEGACY_MOD_2048 and proves(legacy, [0, 5, 11]))
-    check("modulus       : default is 256-bit and identical in both copies",
-          DEFAULT_MOD.bit_length() == 256 and DEFAULT_MOD == u.DEFAULT_MOD)
+    check("modulus       : default is the 2048-bit RSA-2048 composite, "
+          "identical in both copies",
+          DEFAULT_MOD.bit_length() == 2048 and len(str(DEFAULT_MOD)) == 617
+          and DEFAULT_MOD == u.DEFAULT_MOD)
+    # the whole point of the change: a PRIME modulus would hand the leak an
+    # efficient d-th root, so assert the default is genuinely composite and
+    # has no cheaply-findable factor
+    check("modulus       : default is composite (unknown order), no small factors",
+          not ut.is_prime(DEFAULT_MOD, k=32)
+          and all(DEFAULT_MOD % f for f in range(3, 50000, 2)))
+    # commitments made under the superseded primes must still verify, since
+    # params carries the modulus that was actually used
+    legacy256 = Commitment(base, d, q, chunk_size=u_cs, batch_size=u_bs,
+                           mod=u.LEGACY_MOD_256, s_mod=ut.generate_prime(256))
+    check("modulus       : legacy 256-bit commitment still verifies",
+          legacy256.params["mod"] == u.LEGACY_MOD_256 and proves(legacy256, [0, 5, 11]))
 
 
 if __name__ == "__main__":
