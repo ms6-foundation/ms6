@@ -53,11 +53,11 @@ def run(check):
     check("stage 2 replace: proof verifies with the new value",
           proves(B, [0, 7, 18]))
 
-    c_b, h_b, x_b, s_b, hm_b, perm_b, p_b = B.opening()
+    c_b, h_b, x_b, s_b, hm_b, perm_b, h1s_b, p_b = B.opening()
     superseded = {7: base[7]}                      # the value replace() overwrote
     ps_b = ps6(superseded.keys(), h_b, hm_b, s_b, p_b)
     try:
-        vs6(c_b, superseded, ps_b, x_b, perm_b, p_b)
+        vs6(c_b, superseded, ps_b, x_b, perm_b, h1s_b, p_b)
         rejected = False
     except AssertionError:
         rejected = True
@@ -106,7 +106,7 @@ def run(check):
           len(D0.vals) == 20 and D0.live_count == 19 and D0.vals[8] == base3[8]
           and D0.vals[19] == base3[19])
 
-    c_d, h_d, x_d, s_d, hm_d, perm_d, p_d = D0.opening()
+    c_d, h_d, x_d, s_d, hm_d, perm_d, h1s_d, p_d = D0.opening()
     try:
         ps6({7}, h_d, hm_d, s_d, p_d)
         opened_dead = True
@@ -117,13 +117,13 @@ def run(check):
     # a proof issued before the delete must not verify against the new c
     D1 = Commitment(base3, d, q, chunk_size=u_cs, batch_size=u_bs,
                     s_mod=ut.generate_prime(256))
-    c_pre, h_pre, x_pre, s_pre, hm_pre, perm_pre, p_pre = D1.opening()
+    c_pre, h_pre, x_pre, s_pre, hm_pre, perm_pre, h1s_pre, p_pre = D1.opening()
     cl_pre = {6: D1.vals[6]}
     ps_pre = ps6(cl_pre.keys(), h_pre, [list(b) for b in hm_pre],
                  [list(r) for r in s_pre], p_pre)
     D1.delete(7)                      # same batch as index 6
     try:
-        vs6(D1.c, cl_pre, ps_pre, D1.x_list, D1.perms, D1.params)
+        vs6(D1.c, cl_pre, ps_pre, D1.x_list, D1.perms, D1.h1_salts, D1.params)
         stale_ok = True
     except AssertionError:
         stale_ok = False

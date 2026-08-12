@@ -53,7 +53,7 @@ def run(check):
     for (N, bs, cs, d, q, workers) in configs:
         vals = make_vals(N)
         n_batches = (N + bs - 1) // bs
-        c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(
+        c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(
             vals, d, q, chunk_size=cs, batch_size=bs, workers=workers)
         assert len(h_list) == n_batches
 
@@ -77,7 +77,7 @@ def run(check):
             total += 1
             try:
                 ps_list = ps6(iset, h_list, hm_list, s_list, params, workers=workers)
-                ok = vs6(c, claims, ps_list, x_list, perm_list, params, workers=workers)
+                ok = vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=workers)
                 if ok:
                     passed += 1
                 else:

@@ -60,17 +60,17 @@ class Checker:
 def proves(C, idxs):
     """A claim over a commitment, through the unmodified ps6/vs6 path --
     Commitment.opening() returns ms6()'s own tuple, params included."""
-    c_u, h_u, x_u, s_u, hm_u, perm_u, p_u = C.opening()
+    c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, p_u = C.opening()
     cl = {i: C.vals[i] for i in idxs}
     ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u)
-    return vs6(c_u, cl, ps_u, x_u, perm_u, p_u)
+    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u)
 
 
 def proves_with_expect(C, idxs, expect):
-    c_u, h_u, x_u, s_u, hm_u, perm_u, p_u = C.opening()
+    c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, p_u = C.opening()
     cl = {i: C.vals[i] for i in idxs}
     ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u)
-    return vs6(c_u, cl, ps_u, x_u, perm_u, p_u, expect=expect)
+    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u, expect=expect)
 
 
 def rebuilt(C, vals_now):

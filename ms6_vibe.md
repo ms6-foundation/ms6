@@ -2004,3 +2004,120 @@ transform) and speed.
   entry 48's revert), verified green again on the exact committed tree.
   Push to GitHub not possible from this sandbox (no credentials) — same
   environment limitation noted in entries 19/20; push manually.
+
+# Part H — salting the domain hash: closing the offline-guessing gap
+
+## 52. Weaker-assumptions review, then `h1_salt`: a per-batch secret salt mixed into H1
+
+**Request** — "What are the other weaker assumptions in the ms6 that
+makes it less zero knowledge?", then "Yes, sketch what closing the
+biggest gap (the unsalted domain hash) would take and benchmark it."
+
+With entry 51's `domain_hash` giving H1/H2 real collision resistance, the
+next question was what's still weakening confidentiality beyond the
+already-documented singleton-bucket exposure (entries covering
+`sec:leak`/`sec:decoy`). Five gaps were surfaced, ranked:
+
+1. **Unsalted domain hash (the one closed here).** `H1 =
+   domain_hash(H1_TAG:val)` is a pure public function of `val` alone —
+   anyone can hash a guessed value offline and compare, with zero
+   interaction with the prover. Combined with `Observation obs:ratio`
+   (querying the same commitment with two claim sets differing by one
+   item cancels the blinding grid `S(r,j)` and recovers
+   `Edge(H1(i0), r, j, tau_H)` for the unclaimed item), this makes
+   dictionary attacks over low-entropy item spaces — SSNs, names, the
+   paper's own sanctions-screening use case — practical without ever
+   touching the prover.
+2. Structural exposure at edge columns is neutralized, not eliminated
+   (`Proposition prop:leak`/`Corollary cor:cascade` — still true, decoy
+   padding just makes what's exposed inert).
+3. Multi-query security is unaddressed — `S` is fixed across every
+   opening of the same commitment, so it cancels in the ratio trick
+   regardless of how strong the blinding is.
+4. No formal hiding definition or proof exists yet (`Open Problem
+   op:hiding`).
+5. Binding itself isn't formally reduced either (`op:binding`,
+   `op:hash`).
+
+Gap 1 was chosen to close because, unlike true per-item randomness (the
+`hm2` idea aborted in entry 50), a per-*batch* secret that's
+deterministic given the batch salt doesn't break `Commitment.replace()`/
+`delete()` or the incremental-vs-from-scratch rebuild-equivalence
+theorem — it can piggyback on the `batch_salts=` pinning mechanism `S0`
+already uses, so no new per-item storage or protocol round-trip is
+needed.
+
+**Design.** `_h1_salt(s, batch_index)` (new, `ms6/core.py`, right after
+`_s0_grid`): `hashlib.shake_256(f"ms6-h1-salt:{s}:{batch_index}".encode()).hexdigest(16)`.
+Its own dedicated SHAKE-256 draw, deliberately *not* derived from `perm`
+(which rides Python's non-cryptographic `random.Random`/Mersenne
+Twister) — same reasoning `_s0_grid`/`_edge_digits` already use for their
+own secret material. `_hash_item` becomes `H1 =
+domain_hash(H1_TAG:h1_salt:val)`; H2 inherits the salt automatically
+since it's derived from H1 (`H2 = domain_hash(H2_TAG:H1)`), so nothing
+else needed to change downstream of H1.
+
+Threat model matches `perm`/`S0`'s existing one exactly: secret and
+unpredictable before any opening of that batch, revealed as part of an
+*opening* (not the raw commitment `c`) once any item in the batch is
+claimed. This closes the zero-interaction attack (gap 1) but not
+post-opening same-batch guessing — an accepted limitation, not a new
+one; `perm`/`S0` already carry it.
+
+**Blast radius.** `h1_salt` had to travel everywhere `perm` already
+does, since both are per-batch secrets revealed at opening time:
+- `ms6/core.py`: `_ms6_batch` now returns a 9-tuple (added `h1_salt`
+  between `perm` and the counts); `ms6()`'s return grows from 7 to 8
+  values (`h1_salt_list` added before `params`); `Commitment` gained a
+  `self.h1_salts` list, populated in `_new_batch`/
+  `_new_batches_parallel`/`append`/`replace`/`delete`;
+  `Commitment.opening()` returns 8 values instead of 7 (same insertion
+  point).
+- `vs6/core.py`: `_vs6_batch` takes a new `h1_salt=""` parameter and
+  rebuilds H1 the same way; `vs6()` gained a required `h1_salt_list`
+  parameter inserted immediately before `params`.
+  `ps6()`'s signature is untouched — it never touches H1/H2 directly.
+- Every call site across the test suite and `docs/bench_efficiency.py`
+  needed the new value threaded through: `tests/harness.py` (`proves`,
+  `proves_with_expect`), `test_roundtrip.py`, `test_updatability.py`
+  (four `.opening()`/`vs6()` sites), `test_modulus.py`, `test_params.py`
+  (careful not to disturb its deliberate malformed-params rejection
+  test), `test_completeness.py`, `test_adversarial.py` — including its
+  two fabricated-H1 fixtures (`fake_h1s`/`fake_h1s2`), which needed the
+  real batch's `h1_salt_list[0]` mixed in to still match what the actual
+  pipeline would have produced for an untampered item at that position —
+  and `test_leak.py`, where `_decoy_only_col0`'s recomputation of column
+  0 needed the same fix for the same reason (`_hash_item` now requires
+  the batch's real salt to reproduce the real H1). `test_sizing.py`
+  needed no change — its extended-unpack pattern (`_, _, x_list_1, *_ =
+  ms6(...)`) is unaffected by the tuple growing at the tail.
+
+### Measured — 2026-08-12
+
+Isolated: `_h1_salt` costs ~0.58us per call and runs once per **batch**,
+not per item — at `batch_size=1000` (the paper's default), that's fully
+amortized to a rounding error.
+
+`docs/bench_efficiency.py`, same 120,000-item registry, same two-arm
+(2048-bit / 256-bit) comparison as entry 51, before vs. after salting:
+
+| op | before (unsalted) | after (salted) |
+|---|---|---|
+| commit (2048-bit) | 1546ms | 1526ms |
+| prove | 274ms | 277ms |
+| verify | 157ms | 159ms |
+| build | 115ms | 114ms |
+| append | 16ms | 17ms |
+| replace | 37ms | 41ms |
+
+All within normal run-to-run noise — no measurable cost for closing this
+gap, as expected given the per-batch (not per-item) amortization.
+
+### Verified — 2026-08-12
+
+- `python3 -m tests`, three consecutive runs: all green, including the
+  adversarial forgery suite and the leak/decoy numerical checks with the
+  salt threaded through their fabricated-value fixtures.
+- Not yet committed to the paper (no update to `sec:hash`/`op:hiding`
+  made for this specific change) — implementation and benchmark only, on
+  a new `salted-domain-hash` branch off `ms6-shake128`.

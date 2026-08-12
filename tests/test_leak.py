@@ -74,16 +74,21 @@ CS, BS = 12, 20
 SALT = 999983          # pinned so both arms are reproducible
 
 
-def _decoy_only_col0(vals, hm, oset, r, red, mod):
+def _decoy_only_col0(vals, hm, oset, r, red, mod, h1_salt=""):
     """Column 0's aggregate, recomputed purely from _edge_digits -- no
     reference to any item's real H1 content beyond passing it (as the
     deterministic decoy formula requires) into that function. If this
     matches the real pipeline's row[0], column 0 carries no information
     about the registry beyond what _edge_digits already publicly derives
-    from each item's own digest string."""
+    from each item's own digest string.
+
+    h1_salt must be the SAME batch's h1_salt the real pipeline used --
+    otherwise the recomputed h1s (and thus the edge digits derived from it)
+    won't match, even though nothing about the decoy property actually
+    changed."""
     histogram = {}
     for i in oset:
-        h1s = ms6pkg.core._hash_item(vals[i], ms6pkg.core.DEFAULT_S_EXP)[0]
+        h1s = ms6pkg.core._hash_item(vals[i], ms6pkg.core.DEFAULT_S_EXP, h1_salt)[0]
         edge = ms6pkg.core._edge_digits(h1s, r, red, ms6pkg.core.H_EDGE_TAG)
         front_n, _ = ms6pkg.core._front_back_edge_counts(red)
         d0 = edge[0] if front_n > 0 else None
@@ -100,8 +105,8 @@ def _mount(mod, vals):
 
     Returns (bucket_holds_value, recovered_matches_truth, truth_is_decoy).
     """
-    c, hl, xl, sl, hml, pl, params = ms6(vals, D, Q, chunk_size=CS, batch_size=BS,
-                                         mod=mod, s=SALT)
+    c, hl, xl, sl, hml, pl, h1sl, params = ms6(vals, D, Q, chunk_size=CS, batch_size=BS,
+                                               mod=mod, s=SALT)
     iset = {3}
     ps_list = ps6(iset, hl, hml, sl, params)
 
@@ -121,7 +126,8 @@ def _mount(mod, vals):
     # is the exposed quantity junk? row[0] (the H-side half of combined[0])
     # must equal the PURE-decoy reconstruction, with no other channel for
     # real item data to have entered it.
-    truth_is_decoy = row[0] == _decoy_only_col0(vals, hm, oset, r, params["rand_edge_size"], mod)
+    truth_is_decoy = row[0] == _decoy_only_col0(vals, hm, oset, r, params["rand_edge_size"], mod,
+                                                h1_salt=h1sl[b])
 
     # the attack: invert the exponent against the group order. Mod a prime
     # that order is p-1 and this is exact. Mod a composite, n-1 is NOT the

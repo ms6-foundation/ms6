@@ -20,7 +20,7 @@ def run(check):
     B = rebuilt(Commitment(base + extra, D, Q, chunk_size=U_CS,
                            batch_size=U_BS, s_mod=ut.generate_prime(256)),
                 base + extra)
-    c_b, h_b, x_b, s_b, hm_b, perm_b, p_b = B.opening()
+    c_b, h_b, x_b, s_b, hm_b, perm_b, h1s_b, p_b = B.opening()
     # -- params enforcement ---------------------------------------------
     p_ok = B.params
     check("params        : correct expect= accepted",
@@ -29,10 +29,10 @@ def run(check):
     def rejects(expect_or_params, use_as_expect=True):
         try:
             if use_as_expect:
-                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b, p_b,
+                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b, h1s_b, p_b,
                     expect=expect_or_params)
             else:
-                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b,
+                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b, h1s_b,
                     expect_or_params)
             return False
         except ParamMismatch:

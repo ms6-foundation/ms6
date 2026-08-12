@@ -51,14 +51,14 @@ def run(check):
             ok = True           # refused via an error is still a refusal
         return check(f"adversarial   : {name} -- rejected", ok)
 
-    c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(vals, d, q, chunk_size=chunk_size, batch_size=BATCH_SIZE, workers=WORKERS)
+    c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(vals, d, q, chunk_size=chunk_size, batch_size=BATCH_SIZE, workers=WORKERS)
     n_batches = len(h_list)
     print(f"n_batches={n_batches} (N={N}, batch_size={BATCH_SIZE}, workers={WORKERS})")
 
     def verify(claims, ps_list=None):
         if ps_list is None:
             ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, workers=WORKERS)
-        vs6(c, claims, ps_list, x_list, perm_list, params, workers=WORKERS)
+        vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
 
     # 1. single claim, single batch
     claims1 = {5: vals[5]}
@@ -119,7 +119,7 @@ def run(check):
     # behavior: "hm[iset] tampered, but TRUE vals claimed -> still verifies").
     hm_list_fake = [list(hm_b) for hm_b in hm_list]
     fake_val = rnd.randrange(2**200)
-    fake_h1s = M.ut.domain_hash(f"{M.H1_TAG}:{fake_val}".encode())
+    fake_h1s = M.ut.domain_hash(f"{M.H1_TAG}:{h1_salt_list[0]}:{fake_val}".encode())
     iden = f"{'':1>{chunk_size}}"
     x0 = x_list[0]
     fake_hm_row = chunk_of(fake_h1s, iden, x0, chunk_size)
@@ -143,7 +143,7 @@ def run(check):
     # what ms6's commitment was built from.
     hm_list_fake2 = [list(hm_b) for hm_b in hm_list]
     fake_val2 = rnd.randrange(2**200)
-    fake_h1s2 = M.ut.domain_hash(f"{M.H1_TAG}:{fake_val2}".encode())
+    fake_h1s2 = M.ut.domain_hash(f"{M.H1_TAG}:{h1_salt_list[0]}:{fake_val2}".encode())
     fake_hm_row2 = chunk_of(fake_h1s2, iden, x0, chunk_size)
     hm_list_fake2[0][12] = fake_hm_row2   # position 12: same batch (0) as claimed pos 5, itself unclaimed
     ps14 = ps6([5], h_list, hm_list_fake2, s_list, params, workers=WORKERS)

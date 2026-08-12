@@ -51,12 +51,12 @@ def run(check):
 
     # and the two must not be interchangeable: a proof produced under one
     # modulus must not verify against a commitment made under another
-    c_a, h_a, x_a, s_a, hm_a, perm_a, p_a = alt.opening()
+    c_a, h_a, x_a, s_a, hm_a, perm_a, h1s_a, p_a = alt.opening()
     claims = {0: alt.vals[0]}
     ps_a = ps6(claims.keys(), h_a, hm_a, s_a, p_a)
     swapped = dict(p_a, mod=other_composite)
     try:
-        vs6(c_a, claims, ps_a, x_a, perm_a, swapped)
+        vs6(c_a, claims, ps_a, x_a, perm_a, h1s_a, swapped)
         crossed = True
     except (AssertionError, ParamMismatch):
         crossed = False

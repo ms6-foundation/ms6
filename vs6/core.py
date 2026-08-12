@@ -297,7 +297,7 @@ def _get_batch_ids(indices, batch_size=DEFAULT_BATCH_SIZE):
 
 
 def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAULT_MOD, perm=None,
-               rand_edge_size=0):
+               rand_edge_size=0, h1_salt=""):
     """Single-batch reconstruction: returns the batch's own h instead of
     asserting against anything, so vs6() below can fold every batch's h
     together and do one final check against c.
@@ -312,14 +312,17 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     perm must be this batch's own column permutation (ms6's perm_list[b])
     -- interlace_mod applies it to every claimed value's own chunked rows
     so M lines up column-for-column with ps6's already-permuted row[j]/
-    S[j].
+    S[j]. h1_salt must likewise be this batch's own H1 salt (ms6's
+    h1_salt_list[b], see ms6.core._h1_salt) -- without it a claimed
+    item's H1 is recomputed against the wrong (default, unsalted) input
+    and never matches what ms6 actually committed.
     """
 
     # interlace's exponent must match ps6/ms6's q, so M[j] = prod over
     # claimed iset items of digit_j**q -- exactly the factor ps6 deliberately
     # left out (see ps6's _ps6_batch docstring for why).
     if vals:
-        hm = [ut.domain_hash(f"{H1_TAG}:{val}".encode()) for val in vals]
+        hm = [ut.domain_hash(f"{H1_TAG}:{h1_salt}:{val}".encode()) for val in vals]
         M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm, rand_edge_size=rand_edge_size)
     else:
         M = [[1] * chunk_size for _ in range(x)]
@@ -346,7 +349,7 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     return ut.vsum_level(1, values=H, b=chunk_size)
 
 
-def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, expect=None):
+def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=DEFAULT_WORKERS, expect=None):
     """`params` is ms6()'s own returned parameter dict (see PARAM_KEYS) --
     d/q/chunk_size/batch_size/mod/seal_batch_size come from it rather than
     being passed loose, so a proof cannot be verified under different
@@ -364,6 +367,10 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
     perm_list is ms6's own per-batch column-permutation list (its 6th
     return value) -- required so this can reconstruct M with the same
     column layout _ms6_batch/_ps6_batch used (see ms6.py's _column_perm).
+    h1_salt_list is ms6's own per-batch H1/H2 salt list (its 7th return
+    value, see ms6.core._h1_salt) -- required for the same reason, so a
+    claimed item's H1 is recomputed against the salt it was actually
+    committed under rather than the unsalted default.
 
     claims maps each claimed item's GLOBAL index (into the original vals
     list ms6 was given) to its claimed value, e.g. {0: vals[0], 1001:
@@ -389,7 +396,7 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
     touched.
     """
     d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size = unpack_params(params, expect)
-    assert len(ps_list) == len(x_list)
+    assert len(ps_list) == len(x_list) == len(h1_salt_list)
 
     per_batch_vals = [[] for _ in ps_list]
     for g, v in claims.items():
@@ -403,7 +410,7 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futures = {
                 b: ex.submit(_vs6_batch, ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d, q,
-                             1, mod, perm_list[b], rand_edge_size)
+                             1, mod, perm_list[b], rand_edge_size, h1_salt_list[b])
                 for b in touched
             }
             for b, fut in futures.items():
@@ -411,7 +418,8 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
     else:
         for b in touched:
             h_list[b] = _vs6_batch(ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d, q,
-                               workers=workers, mod=mod, perm=perm_list[b], rand_edge_size=rand_edge_size)
+                               workers=workers, mod=mod, perm=perm_list[b], rand_edge_size=rand_edge_size,
+                               h1_salt=h1_salt_list[b])
 
     h = _seal_batch(h_list, chunk_size, max(x_list), d, q, mod, seal_batch_size)
     assert h == c

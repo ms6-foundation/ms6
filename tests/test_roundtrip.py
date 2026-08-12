@@ -27,7 +27,7 @@ def run(check):
     # ProcessPoolExecutor's pickling can cost more than it saves -- prefer
     # workers=1 there.
     workers = multiprocessing.cpu_count()
-    c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(vals, d, q, chunk_size=chunk_size)
+    c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(vals, d, q, chunk_size=chunk_size)
 
     claims = {0: vals[0], 99: vals[99]}
 
@@ -41,14 +41,14 @@ def run(check):
 
     ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, workers=1)
     check("round trip    : commit -> open -> verify over %d items" % len(vals),
-          vs6(c, claims, ps_list, x_list, perm_list, params, workers=1, expect=agreed))
+          vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=1, expect=agreed))
 
     # a wrong value at a claimed index must be rejected, or "it verified" means
     # nothing
     tampered = dict(claims)
     tampered[0] = vals[1]
     try:
-        vs6(c, tampered, ps_list, x_list, perm_list, params, workers=1, expect=agreed)
+        vs6(c, tampered, ps_list, x_list, perm_list, h1_salt_list, params, workers=1, expect=agreed)
         rejected = False
     except AssertionError:
         rejected = True

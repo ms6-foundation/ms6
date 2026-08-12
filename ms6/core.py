@@ -118,13 +118,19 @@ H_EDGE_TAG = "ms6-edge-h"
 S_EDGE_TAG = "ms6-edge-s"
 
 # Domain-separation tags for the item digest itself (H1/H2, see
-# _hash_item): H1_TAG for H1 = domain_hash(H1_TAG:val) (the H/accH side,
-# which vs6._vs6_batch must reproduce for claimed items -- see its own
-# H1_TAG copy) and H2_TAG for H2 = domain_hash(H2_TAG:H1) (the S/accS
-# side, prover-only, same no-cross-package-obligation note as S_EDGE_TAG
-# above). Tagging H2 off of H1 rather than off of `val` directly keeps H1
-# and H2 from being two evaluations of the same hash on related inputs
-# with no separation between them.
+# _hash_item): H1_TAG for H1 = domain_hash(H1_TAG:h1_salt:val) (the
+# H/accH side, which vs6._vs6_batch must reproduce for claimed items --
+# see its own H1_TAG copy) and H2_TAG for H2 = domain_hash(H2_TAG:H1) (the
+# S/accS side, prover-only, same no-cross-package-obligation note as
+# S_EDGE_TAG above). Tagging H2 off of H1 rather than off of `val`
+# directly keeps H1 and H2 from being two evaluations of the same hash on
+# related inputs with no separation between them; it also means H2
+# inherits h1_salt's effect automatically without its own copy of it.
+#
+# h1_salt (see _h1_salt) is the per-batch secret that keeps H1 from being
+# a pure public function of val alone -- closes the domain hash's
+# zero-interaction guessing gap discussed in the eprint's confidentiality
+# section. Unlike these two tags, it is NOT a fixed public constant.
 H1_TAG = "ms6-h1"
 H2_TAG = "ms6-h2"
 
@@ -357,7 +363,49 @@ def _s0_grid(s, batch_index, rows, chunk_size, s_mod):
     return grid
 
 
-def _hash_item(val, s_exp=None):
+def _h1_salt(s, batch_index):
+    """Per-batch secret mixed into H1 (and, transitively, H2 -- see
+    _hash_item) so the domain hash stops being a pure public function of
+    an item's value alone.
+
+    WHY: domain_hash(H1_TAG:val) with no salt lets anyone precompute H1
+    for any candidate value entirely offline, with zero interaction --
+    the domain hash's one-wayness (Open Problem op:hiding in the eprint)
+    only stops INVERTING an unknown digest, not VERIFYING a guessed value
+    against one, which is the actual attack the singleton-bucket ratio
+    trick (Observation obs:ratio) enables once combined with an unsalted
+    hash: query the same commitment with two claim sets differing by one
+    item, cancel S(r,j) out, and the residual is Edge(H1(i0), ...) -- a
+    known, checkable function of the unclaimed item's own H1. For a
+    low-entropy item space (this construction's own stated use case,
+    sanctions/watchlist screening -- SSNs, names, DOBs), that check is
+    cheap enough to run over the whole plausible universe.
+
+    Mixing a per-batch secret in raises the bar from "guess offline,
+    zero interaction" to "obtain at least one opening from this batch
+    first" -- exactly the same threat model _column_perm's own perm and
+    _s0_grid's own S0 already accept: unpredictable before any opening,
+    revealed as part of an opening (not the raw commitment `c`) same as
+    perm already is, so guessing against a batch's STILL-unclaimed items
+    is possible once that batch's h1_salt is public, but not before.
+    This does not close that residual gap (see Remark on multi-query
+    exposure in the eprint); it closes the strictly worse zero-
+    interaction case, which is the status quo today.
+
+    SHAKE-256 (not Random(seed), not reusing perm's own Mersenne-Twister
+    output): same reasoning as _s0_grid's own docstring -- a construction
+    whose internal state is recoverable from its output must not be the
+    thing standing between an observer and every other batch-wide secret.
+    Deterministic given (s, batch_index), like perm/S0, NOT independently
+    random per item like the truly-random hm2 proposal that was
+    considered and aborted -- so it needs no new per-item storage:
+    Commitment.replace()/delete() and the incremental-vs-from-scratch
+    rebuild equivalence (pinned via batch_salts=) keep working unchanged,
+    since this is recoverable from the same salt they already pin."""
+    return hashlib.shake_256(f"ms6-h1-salt:{s}:{batch_index}".encode()).hexdigest(16)
+
+
+def _hash_item(val, s_exp=None, h1_salt=""):
     """One item's two independent hash-digit strings -- H1 (feeds accH, the
     primary commitment grid) and H2 (feeds accS, the blinding-side
     accumulator) -- both via Utils.domain_hash (SHAKE128), tagged apart by
@@ -382,8 +430,15 @@ def _hash_item(val, s_exp=None):
     s_exp is accepted but unused -- kept only so callers that still pass
     it positionally (tests/test_leak.py's direct use of H1 alone) don't
     need updating; s_exp itself remains meaningful elsewhere in this
-    module (hmax sizing), just never fed into H1/H2 anymore."""
-    h1s = ut.domain_hash(f"{H1_TAG}:{val}".encode())
+    module (hmax sizing), just never fed into H1/H2 anymore.
+
+    h1_salt (see _h1_salt) is mixed into H1 so it is no longer a pure
+    public function of val alone -- default "" reproduces the OLD
+    unsalted behavior for any caller that hasn't been updated to pass
+    one, rather than silently changing every existing digest. H2 is
+    computed from H1 (not val directly), so it inherits the salt's effect
+    automatically without needing its own copy."""
+    h1s = ut.domain_hash(f"{H1_TAG}:{h1_salt}:{val}".encode())
     h2s = ut.domain_hash(f"{H2_TAG}:{h1s}".encode())
     return h1s, h2s
 
@@ -405,7 +460,7 @@ def _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size):
     return hm1, hm2
 
 
-def _item_rows(val, chunk_of, perm, s_exp, rand_edge_size=0):
+def _item_rows(val, chunk_of, perm, s_exp, rand_edge_size=0, h1_salt=""):
     """One item's permuted, edge-padded digit rows for the H side (hm1)
     and the S side (hm2), against an ALREADY-SIZED, ALREADY-NARROWED
     (chunk_size - rand_edge_size) chunk_of/perm pair (x fixed). See
@@ -414,8 +469,10 @@ def _item_rows(val, chunk_of, perm, s_exp, rand_edge_size=0):
     path (Commitment.append/replace) derives an item's contribution the
     exact same way the original commit did -- the two must agree
     character-for-character or the counts they add and subtract won't
-    cancel."""
-    h1s, h2s = _hash_item(val, s_exp)
+    cancel. h1_salt must be the SAME batch's h1_salt (see _h1_salt) the
+    original commit used, or the recomputed hm1/hm2 silently disagree
+    with what's already folded into that batch's counts."""
+    h1s, h2s = _hash_item(val, s_exp, h1_salt)
     return _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size)
 
 
@@ -483,6 +540,12 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     perm = _column_perm(s * 1_000_000_007 + batch_index, real_width)
     iden = u.PAD * real_width
 
+    # Per-batch secret mixed into H1/H2 -- see _h1_salt's own docstring for
+    # why (closes the domain hash's zero-interaction guessing gap). Same
+    # batch_index-mixing reasoning as perm above: without it every batch
+    # under one commit's shared `s` would reuse the same salt.
+    h1_salt = _h1_salt(s, batch_index)
+
     # Every item is hashed once, up front, so x (this batch's row count)
     # can be sized from the ACTUAL digests in play, rather than guessed at.
     #
@@ -507,7 +570,7 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # construction, always wide enough for every item this batch commits.
     # The per-cell blinding *values* are still salt-derived (_s0_grid);
     # only the grid's row *count* stopped taking its size from the salt.
-    hashed = [_hash_item(val, s_exp) for val in vals]
+    hashed = [_hash_item(val, s_exp, h1_salt) for val in vals]
     widest = max((len(h) for pair in hashed for h in pair), default=1)
     # ceil(widest / real_width), NOT chunk_size: each row only carries
     # real_width real digits now (the rest is edge padding), so sizing
@@ -579,12 +642,15 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # perm is returned so vs6 can apply the same column permutation to a
     # claimed value's freshly-hashed rows (via interlace_mod) -- ps6 needs
     # no separate copy, since hm is already stored here in permuted form.
+    # h1_salt travels the same way and for the same reason: vs6 needs it to
+    # recompute a claimed item's H1 identically (see _h1_salt); ps6 needs
+    # no separate copy of it either, for the same reason it needs no perm.
     #
     # accH/accS's counts and the batch salt are returned for Commitment's
     # sake: the counts are what an update edits in place (no rehashing of
     # untouched items), and the salt is what lets a later reseal rebuild
-    # the same S0/perm/x. ms6() discards both.
-    return h, x, S, hm, perm, accH.cnt, accS.cnt, s
+    # the same S0/perm/x/h1_salt. ms6() discards both.
+    return h, x, S, hm, perm, h1_salt, accH.cnt, accS.cnt, s
 
 
 def _seal_mod(bits):
@@ -674,6 +740,9 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     perm_list holds each batch's secret-salt-derived column permutation
     (see _column_perm) -- pass it to vs6 alongside x_list; ps6 doesn't
     need it separately, since hm_list is already stored in permuted form.
+    h1_salt_list holds each batch's secret-salt-derived H1/H2 salt (see
+    _h1_salt) -- same deal: pass it to vs6 alongside perm_list, ps6 needs
+    no separate copy of it either.
 
     s_mod=None (the default) builds every batch's S grid in DEFAULT_S_MOD,
     the same ring the H side uses. It is deliberately not returned and not
@@ -732,18 +801,19 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
             for batch_index, start in enumerate(starts)
         ]
 
-    h_list, x_list, s_list, hm_list, perm_list = [], [], [], [], []
-    for h_b, x_b, s_b, hm_b, perm_b, _cntH, _cntS, _salt in batch_results:
+    h_list, x_list, s_list, hm_list, perm_list, h1_salt_list = [], [], [], [], [], []
+    for h_b, x_b, s_b, hm_b, perm_b, h1_salt_b, _cntH, _cntS, _salt in batch_results:
         h_list.append(h_b)
         x_list.append(x_b)
         s_list.append(s_b)
         hm_list.append(hm_b)
         perm_list.append(perm_b)
+        h1_salt_list.append(h1_salt_b)
 
     params = make_params(d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size)
     h = _seal_batch(h_list, chunk_size, max(x_list), d, q, mod, seal_batch_size)
 
-    return h, h_list, x_list, s_list, hm_list, perm_list, params
+    return h, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params
 
 
 class _SealTree:
@@ -885,7 +955,10 @@ class Commitment:
                  rand_edge_size=DEFAULT_RAND_EDGE_SIZE):
         """batch_salts pins each batch's salt instead of drawing fresh ones.
         Only for reproducing a commitment (the incremental-vs-from-scratch
-        equivalence test relies on it); leave it None in normal use."""
+        equivalence test relies on it); leave it None in normal use.
+        Pinning it also pins h1_salt (see _h1_salt) for free, since h1_salt
+        is derived from the batch salt rather than drawn independently --
+        no separate pinning knob is needed for it."""
         vals = list(vals)
         if not vals:
             raise ValueError("Commitment needs at least one value")
@@ -911,7 +984,7 @@ class Commitment:
 
         self.vals = []
         self.dead = set()
-        self.salts, self.x_list, self.perms = [], [], []
+        self.salts, self.x_list, self.perms, self.h1_salts = [], [], [], []
         self.cntH, self.cntS, self.hm_list = [], [], []
         self.s_list, self.h_list = [], []
 
@@ -935,7 +1008,7 @@ class Commitment:
     def _new_batch(self, batch_vals):
         b = len(self.h_list)
         salt = self._next_salt(b)
-        h, x, S, hm, perm, cntH, cntS, salt = _ms6_batch(
+        h, x, S, hm, perm, h1_salt, cntH, cntS, salt = _ms6_batch(
             batch_vals, self.chunk_size, self.d, self.q, self.s, self.s_exp,
             mod=self.mod, s_mod=self.s_mod, rand_edge_size=self.rand_edge_size,
             keep_hm=True, workers=self.workers,
@@ -944,6 +1017,7 @@ class Commitment:
         self.salts.append(salt)
         self.x_list.append(x)
         self.perms.append(perm)
+        self.h1_salts.append(h1_salt)
         self.cntH.append(cntH)
         self.cntS.append(cntS)
         self.hm_list.append(hm)
@@ -991,11 +1065,12 @@ class Commitment:
             ]
             results = [f.result() for f in futures]
 
-        for group, (h, x, S, hm, perm, cntH, cntS, salt) in zip(batch_groups, results):
+        for group, (h, x, S, hm, perm, h1_salt, cntH, cntS, salt) in zip(batch_groups, results):
             self.vals.extend(group)
             self.salts.append(salt)
             self.x_list.append(x)
             self.perms.append(perm)
+            self.h1_salts.append(h1_salt)
             self.cntH.append(cntH)
             self.cntS.append(cntS)
             self.hm_list.append(hm)
@@ -1012,10 +1087,11 @@ class Commitment:
                            self.mod, self.seal_batch_size, self.rand_edge_size)
 
     def opening(self):
-        """(c, h_list, x_list, s_list, hm_list, perm_list, params) -- same
-        shape and meaning as ms6()'s return, so ps6/vs6 take it unchanged."""
+        """(c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list,
+        params) -- same shape and meaning as ms6()'s return, so ps6/vs6
+        take it unchanged."""
         return (self.c, self.h_list, self.x_list, self.s_list, self.hm_list,
-                self.perms, self.params)
+                self.perms, self.h1_salts, self.params)
 
     def _chunk_of(self, b):
         real_width = self.chunk_size - self.rand_edge_size
@@ -1097,7 +1173,7 @@ class Commitment:
             return len(self.vals) - 1
 
         hm1, hm2 = _item_rows(val, self._chunk_of(last), self.perms[last], self.s_exp,
-                              self.rand_edge_size)
+                              self.rand_edge_size, self.h1_salts[last])
         self._check_fits(last, val, hm1, hm2)
         _apply_rows(self.cntH[last], hm1, +1)
         _apply_rows(self.cntS[last], hm2, +1)
@@ -1120,8 +1196,9 @@ class Commitment:
         local = index - b * self.batch_size
         chunk_of, perm = self._chunk_of(b), self.perms[b]
 
-        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.s_exp, self.rand_edge_size)
-        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.s_exp, self.rand_edge_size)
+        h1_salt = self.h1_salts[b]
+        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.s_exp, self.rand_edge_size, h1_salt)
+        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.s_exp, self.rand_edge_size, h1_salt)
         self._check_fits(b, new_val, new_h1, new_h2)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
@@ -1155,7 +1232,8 @@ class Commitment:
         local = index - b * self.batch_size
 
         old_h1, old_h2 = _item_rows(self.vals[index], self._chunk_of(b),
-                                    self.perms[b], self.s_exp, self.rand_edge_size)
+                                    self.perms[b], self.s_exp, self.rand_edge_size,
+                                    self.h1_salts[b])
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
 
