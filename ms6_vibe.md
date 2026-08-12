@@ -2121,3 +2121,103 @@ gap, as expected given the per-batch (not per-item) amortization.
 - Not yet committed to the paper (no update to `sec:hash`/`op:hiding`
   made for this specific change) — implementation and benchmark only, on
   a new `salted-domain-hash` branch off `ms6-shake128`.
+
+## 53. `QueryGovernor`: a deployment-level policy layer for the multi-query correlation risk
+
+**Request** — "What are the other weaker assumptions..." surfaced gap 3
+in that discussion: "`S` is fixed across every opening of the same
+commitment, so it cancels in the ratio trick regardless of how strong the
+blinding is." Follow-up: "how to address the Multi-query security gap as
+`S` is fixed across openings of the same commitment?", then "Implement
+the option 1 for the deployment-level query governance."
+
+Unlike entry 52's `h1_salt` (a pure standalone function call, free to
+change), `S` cannot be fixed the same way: tracing the actual math showed
+`H'(r,j) = H(r,j) * S(r,j)^d` is what gets row-sealed into `h_row`, then
+`h_batch`, then `c` itself (`_seal_grid`) — `S` is baked into the
+commitment root at commit time, over the FULL item set. `Commitment.
+replace()`/`append()` already document reusing the SAME `s`/`perm`/`S0`
+for exactly this reason (the update-equivalence theorem needs it). So `S`
+cannot be refreshed per query without producing a different `c` — closing
+this cryptographically would mean decoupling `c` from `S` entirely and
+adding a per-query rerandomization proof, a real redesign with its own
+binding-safety analysis, not a sketch-and-benchmark change.
+
+Three options were laid out, ranked by cost: (1) deployment-level query
+governance — no code change to the scheme itself, refuse/rate-limit
+claim-set pairs that are suspiciously close to ones already served; (2)
+scheduled batch-salt rotation, reusing existing `Commitment(...,
+batch_salts=...)` reseal machinery; (3) true per-query rerandomization —
+research-scope, risks weakening binding if done carelessly. Option 1 was
+chosen: cheapest, closes the concrete attack shape the eprint's
+Observation `obs:ratio` describes, and needed no changes to `ms6()`/
+`ps6()`/`vs6()`'s existing signatures (an intentionally additive-only
+change, unlike entry 52's breaking one).
+
+**What was built** (`ms6/core.py`, right after `_get_batch_ids`):
+- `QueryPolicyViolation(Exception)` — raised on refusal.
+- `QueryGovernor` — tracks, per batch, every DISTINCT claim set (as
+  batch-local frozensets) already served. `authorize(iset)` refuses when,
+  for any touched batch: the claim set's symmetric difference from a
+  prior one is below `min_new_items` (default 2 — catches the literal
+  `obs:ratio` construction, `{i1}` then `{i1,i0}`, symmetric difference
+  1, in BOTH directions — adding a claim or dropping one), or the batch
+  already holds `max_openings_per_batch` distinct claim sets. Exact
+  repeats are always free and don't consume the cap (re-fetching an
+  already-served proof isn't a new correlation opportunity). Validates
+  ALL touched batches before recording ANY of them (no partial state on
+  a refused multi-batch request). Optional `logger.warning()` callback on
+  every refusal for audit/anomaly-detection.
+- `ps6_governed(governor, iset, ...)` — thin wrapper: `governor.
+  authorize(iset)` then `ps6(...)`. `ps6()` itself is untouched; anyone
+  can still call it directly and opt out of this policy layer entirely.
+- Exported from `ms6/__init__.py` alongside the rest of the public API.
+
+**Explicitly scoped as a mitigation, not a proof.** The class docstring
+states plainly: raising `min_new_items` narrows but doesn't eliminate the
+room for a patient adversary to chain many pairwise-permitted queries
+into a cumulative correlation; `max_openings_per_batch` (forcing a salt
+rotation once hit) is the actual backstop. Also flagged: this is
+per-process, in-memory state only — a deployment running multiple
+prover replicas against the same commitment needs to back it with shared
+storage or route through one governor instance, not assume this alone
+coordinates across processes.
+
+**Comment cleanup, this entry's own pass:** an Explore agent audited the
+new code plus the rest of the codebase for staleness. Found one real bug
+in the new docstring, not the old code: the "WHY min_new_items" paragraph
+claimed blocking symmetric difference `< min_new_items` catches the
+literal construction "and its mirror -- claim sets that swap one claimed
+item for another" at `min_new_items >= 2`. False — a swap (`{a}` then
+`{b}`, `a != b`) has symmetric difference 2 (the sets share nothing), not
+1, so it needs `min_new_items >= 3` to catch, exactly as the test suite
+itself already demonstrated (`tests/test_query_governance.py`'s
+"disjoint single-item swap... NOT blocked by default" check). Fixed to
+correctly describe both true difference-1 directions (add one, drop one)
+and call out the swap case as difference-2 explicitly. Separately,
+`_h1_salt`'s docstring (entry 52) referenced "Remark on multi-query
+exposure in the eprint" — no remark by that title exists; retitled to
+the actual section (Observation `obs:ratio` / "What an observer can
+still compute") and added a forward-pointer to `QueryGovernor` as this
+codebase's mitigation for the sibling S-cancellation risk. No other
+stale comments found across `ms6/*.py`, `vs6/*.py`, `tests/*.py`,
+`examples/*.py`.
+
+### Verified — 2026-08-12
+
+- New `tests/test_query_governance.py` (wired into `tests/run_all.py`):
+  the literal `obs:ratio` pair blocked; the swap variant correctly NOT
+  blocked at the default `min_new_items=2` and correctly blocked at
+  `min_new_items=3`; sufficiently-different claims allowed; exact repeats
+  free and cap-exempt; `max_openings_per_batch` enforced; a violation on
+  one touched batch blocks a whole multi-batch request with zero partial
+  state recorded elsewhere; independent claims on separate batches both
+  succeed; the logger callback fires on refusal; and an end-to-end run
+  against a real `Commitment` via `ps6_governed` blocks the paper's exact
+  construction while still serving a legitimately different follow-up
+  claim.
+- `python3 -m tests`, three consecutive runs: all green (73 checks, 0
+  failures), including after the docstring fixes above.
+- Not yet committed to the paper — implementation, tests, and the
+  comment-cleanup pass only, on a new `multi-query-governance` branch off
+  `salted-domain-hash`.

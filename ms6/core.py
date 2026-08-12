@@ -388,9 +388,13 @@ def _h1_salt(s, batch_index):
     revealed as part of an opening (not the raw commitment `c`) same as
     perm already is, so guessing against a batch's STILL-unclaimed items
     is possible once that batch's h1_salt is public, but not before.
-    This does not close that residual gap (see Remark on multi-query
-    exposure in the eprint); it closes the strictly worse zero-
-    interaction case, which is the status quo today.
+    This does not close that residual gap (see Observation obs:ratio /
+    "What an observer can still compute" in the eprint); it closes the
+    strictly worse zero-interaction case. A sibling risk -- S(r,j) itself
+    being fixed across every opening of a commitment, letting two
+    suitably-chosen openings cancel it out of their ratio -- is not
+    addressed here either; QueryGovernor (below) is this codebase's
+    deployment-level (policy, not cryptographic) mitigation for that one.
 
     SHAKE-256 (not Random(seed), not reusing perm's own Mersenne-Twister
     output): same reasoning as _s0_grid's own docstring -- a construction
@@ -1254,6 +1258,164 @@ class Commitment:
 def _get_batch_ids(indices, batch_size=DEFAULT_BATCH_SIZE):
     """Given a list of indices, return the corresponding batch (group) id for each."""
     return [index // batch_size for index in indices]
+
+
+class QueryPolicyViolation(Exception):
+    """Raised by QueryGovernor.authorize() when a claim set should not be
+    served -- see QueryGovernor's own docstring for what this does and
+    does not defend against."""
+
+
+class QueryGovernor:
+    """A deployment-level POLICY layer, not a cryptographic fix, for the
+    multi-query correlation risk the eprint documents (Observation
+    obs:ratio / "What an observer can still compute"): the blinding grid
+    S(r,j) is fixed for the whole life of a commitment -- it is folded
+    into H'(r,j) = H(r,j) * S(r,j)^d at commit time, which is what gets
+    row-sealed into h_row, then h_batch, then c itself (_seal_grid). It
+    cannot be refreshed per query without changing c; Commitment.replace()/
+    append() deliberately reuse the SAME s/perm/S0 for exactly this reason
+    (see thm:update-equiv). So closing this cryptographically would mean
+    decoupling c from S entirely and adding a per-query rerandomization
+    proof -- a real redesign, not a drop-in fix (see the eprint's
+    discussion of why blinding S more heavily does not, by itself, change
+    that it's fixed across openings).
+
+    What CAN be done without touching the scheme's math: refuse to serve
+    an opening whose claim set is suspiciously close to one already
+    served against the same batch, and cap how many distinct openings a
+    batch will ever serve before an operator should rotate that batch's
+    salt (a full reseal, out of scope for this class -- it just tracks
+    when that's due).
+
+    WHY min_new_items, not min_new_items=1: the literal obs:ratio
+    construction queries claim sets differing by exactly one item
+    (symmetric difference 1) to cancel S(r,j) in the ratio between the two
+    proofs -- both the "add one claimed item" direction (I1={i1} then
+    I2={i1,i0}, as stated in the eprint) and its mirror, "drop one claimed
+    item" (I2 first, then I1), are symmetric difference 1 and are both
+    blocked once min_new_items >= 2. A THIRD shape -- swapping one claimed
+    item for a different one (I1={a} then I2={b}, a != b) -- is symmetric
+    difference 2, not 1 (the two claim sets share no elements at all), and
+    needs min_new_items >= 3 to catch; it is not blocked by the default.
+    This is deliberately NOT presented as a complete defense: a patient adversary
+    submitting many claim sets that are each individually >= min_new_items
+    away from every prior one can, in principle, still assemble a chain of
+    pairwise-permitted queries whose CUMULATIVE differences let it isolate
+    individual items' contributions (e.g. three queries A, B, C where no
+    pair is closer than min_new_items but A/C's own difference, or some
+    linear combination across all three, is small). Raising min_new_items
+    narrows that room but does not eliminate it; max_openings_per_batch is
+    the actual backstop, since it bounds how many queries an adversary
+    ever gets to chain in the first place. Defense in depth, not a proof.
+
+    SCOPE: per-process, in-memory history. This does not survive a
+    restart and does not coordinate across multiple prover processes/
+    replicas serving the same commitment -- a deployment that needs either
+    must back this with shared storage (e.g. swap self._history for a
+    lookup against a shared store) or front multiple provers with a
+    single governor instance. Flagged here rather than silently assumed.
+    """
+
+    def __init__(self, batch_size=DEFAULT_BATCH_SIZE, min_new_items=2,
+                 max_openings_per_batch=None, logger=None):
+        """batch_size must match the commitment's own (ps6/vs6 read it
+        from params; this class is handed it directly since it has no
+        other way to learn it, and is meant to run in front of ps6 rather
+        than wrap it).
+
+        min_new_items: smallest symmetric-difference size, between a
+        requested claim set and every DISTINCT claim set already served
+        against the same batch, that authorize() will allow. A repeat of
+        an EXACT prior claim set (symmetric difference 0) is always
+        allowed and does not consume a max_openings_per_batch slot --
+        re-fetching a proof already served is not a new correlation
+        opportunity.
+
+        max_openings_per_batch: refuse to record a DISTINCT new claim set
+        against a batch once that batch has already served this many
+        (None = uncapped). Once a batch hits this, the recommended
+        operator action is to rotate that batch's salt.
+
+        logger: optional object with a .warning(msg) method (a stdlib
+        logging.Logger works directly), called with a human-readable
+        reason on every refusal, before the exception is raised -- so an
+        operator gets a durable record even if the caller catches
+        QueryPolicyViolation and moves on.
+        """
+        self.batch_size = batch_size
+        self.min_new_items = min_new_items
+        self.max_openings_per_batch = max_openings_per_batch
+        self.logger = logger
+        self._history = {}            # batch_index -> list[frozenset(local indices)]
+
+    def _local_claim_sets(self, iset):
+        """Split a GLOBAL claim set into {batch_index: frozenset(local indices)}."""
+        by_batch = {}
+        for g in iset:
+            b = g // self.batch_size
+            by_batch.setdefault(b, set()).add(g - b * self.batch_size)
+        return {b: frozenset(s) for b, s in by_batch.items()}
+
+    def _warn(self, msg):
+        if self.logger is not None:
+            self.logger.warning(msg)
+
+    def authorize(self, iset):
+        """Call BEFORE generating a proof for `iset` (i.e. before ps6()).
+        Raises QueryPolicyViolation and refuses to record anything if any
+        touched batch's history makes this claim set too close to one
+        already served, or if a touched batch is already at its opening
+        cap. Otherwise records the (per-batch) claim sets and returns
+        None. Checked read-only against ALL touched batches before
+        recording ANY of them, so a violation on one batch never leaves a
+        partial record for the others."""
+        local = self._local_claim_sets(iset)
+
+        # pass 1: validate every touched batch before recording anything
+        for b, claim in local.items():
+            history = self._history.get(b, [])
+            if claim in history:
+                continue                  # exact repeat: always fine, no cap consumed
+            if (self.max_openings_per_batch is not None
+                    and len(history) >= self.max_openings_per_batch):
+                self._warn(f"QueryGovernor: batch {b} refused -- already served "
+                           f"{len(history)} distinct claim set(s), at its cap of "
+                           f"{self.max_openings_per_batch}; rotate this batch's salt")
+                raise QueryPolicyViolation(
+                    f"batch {b} is at its opening cap ({self.max_openings_per_batch})")
+            for prev in history:
+                diff = len(claim ^ prev)
+                if diff < self.min_new_items:
+                    self._warn(f"QueryGovernor: batch {b} refused -- claim set differs "
+                               f"from a previously served one by only {diff} item(s) "
+                               f"(minimum {self.min_new_items}); this is the shape "
+                               f"Observation obs:ratio exploits")
+                    raise QueryPolicyViolation(
+                        f"batch {b}: claim set differs from a prior one by only "
+                        f"{diff} item(s) (< min_new_items={self.min_new_items})")
+
+        # pass 2: everything validated, now record
+        for b, claim in local.items():
+            history = self._history.setdefault(b, [])
+            if claim not in history:
+                history.append(claim)
+
+    def history_for_batch(self, batch_index):
+        """Read-only view of the distinct claim sets recorded so far for
+        one batch (local indices) -- e.g. to decide whether a batch is
+        approaching its cap and due for salt rotation."""
+        return list(self._history.get(batch_index, []))
+
+
+def ps6_governed(governor, iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=None):
+    """Convenience wrapper: governor.authorize(iset) then ps6(...). Purely
+    additive -- ps6() itself is unchanged and can still be called directly
+    by anyone who doesn't want this policy layer (e.g. a deployment doing
+    its own query governance, or one that has decided the risk is
+    acceptable for its use case)."""
+    governor.authorize(iset)
+    return ps6(iset, h_list, hm_list, s_list, params, workers=workers, expect=expect)
 
 
 def _ps6_batch(hm, iset, chunk_size, d, q, S, mod=DEFAULT_MOD, workers=DEFAULT_WORKERS):

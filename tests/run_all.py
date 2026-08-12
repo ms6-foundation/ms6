@@ -13,7 +13,7 @@ from tests.harness import Checker                    # noqa: E402
 from tests import (                                  # noqa: E402
     bench, test_roundtrip, test_updatability, test_modulus,
     test_sealtree, test_params, test_parity, test_sizing,
-    test_completeness, test_adversarial, test_leak,
+    test_completeness, test_adversarial, test_leak, test_query_governance,
 )
 
 MODULES = [
@@ -27,6 +27,7 @@ MODULES = [
     ("completeness", test_completeness),
     ("adversarial", test_adversarial),
     ("leak", test_leak),
+    ("query governance", test_query_governance),
 ]
 
 
