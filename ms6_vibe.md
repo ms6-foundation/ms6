@@ -1834,3 +1834,173 @@ pending an explicit request to reconcile it.
   stay on the composite, the prime, or make it a deployment-time choice
   is a cost/trust tradeoff, not a correctness question — nothing above
   about the decoy property or binding depends on which one is default.
+
+## 49. Paper reconciled to the RSA-2048 default; efficiency section rewritten
+
+**Request** — "Please update the efficiency section in the paper and
+convert it to pdf," arriving mid-turn while entry 48's code revert was
+still being verified.
+
+Entry 48 reverted the shipped modulus in code but left `docs/ms6_eprint.tex`
+arguing for the *previous* design (256-bit prime as default) in several
+places, not just the Efficiency table — `Remark~\ref{rem:mod-choice}`, the
+parameter table's `p` row, the status box, the two-arm leak-verification
+description, and the conclusion all still asserted a 256-bit prime was
+shipped. Treated as one consistency sweep rather than touching only the
+named section, since leaving the rest contradicting it would make the
+paper internally inconsistent:
+
+- `Remark~\ref{rem:mod-choice}` rewritten from "the modulus no longer
+  carries this property, so it's a fixed 256-bit prime" to "the modulus is
+  a cost/defense-in-depth trade-off, not a requirement" — states the
+  shipped RSA-2048 composite is kept as an independent second layer, cites
+  the measured 2-3x prove/verify cost of that choice, and points out a
+  caller can pass any `mod=` they prefer.
+- Efficiency section rebuilt as a genuine two-column comparison table
+  (2048-bit vs. 256-bit, both arms of `docs/bench_efficiency.py`) rather
+  than a single-arm table, with prose explaining why prove/verify show the
+  largest gap (modular-exponentiation-dominated) and commit/build/append/
+  replace a much smaller one.
+- Section~\ref{sec:leak-verify}'s Arm 1/Arm 2 description swapped to match
+  entry 48's actual test_leak.py swap (Arm 1 = shipped composite, fails;
+  Arm 2 = fresh prime, succeeds) — was still describing the pre-revert
+  arm assignment.
+- Status box, parameter table row, and conclusion's modulus-choice
+  sentence all updated to name the RSA-2048 composite as shipped rather
+  than a 256-bit prime.
+
+### Verified — 2026-08-12
+
+- `pdflatex`, three passes: 20 pages (grew by one from the earlier 19), no
+  undefined references, no errors.
+- Table/prose spot-checked via `pdftotext -layout` against the intended
+  wording rather than assumed correct from the `.tex` source alone.
+
+## 50. Truly-random H2 for `hm2`/`accS` — proposed, then aborted
+
+**Request** — "Please construct the hm2 in the `_rows_from_hash` that get
+accumulated to `accS.add(hm2)` using truly random values rather than
+deterministic random values." Later, mid-design: "H2 do not need to random
+but only random edge should be truly random... lets abort this change for
+now."
+
+`hm2`'s H2 was, at the time, `hash(H1, s_exp)` — a deterministic function
+of the item's own value, not actual entropy. Investigated what making it
+genuinely random (SystemRandom draw, independent of the item) would break:
+
+- `Commitment.replace()`/`delete()` currently recompute an item's old
+  `hm2` by re-hashing `self.vals[index]` — with true randomness there is
+  nothing to re-derive, so undoing a replace/delete would subtract the
+  WRONG per-item counts from `cntS`, silently corrupting every other item
+  sharing that batch.
+- The "incremental update == from-scratch rebuild" equivalence
+  (`tests/test_updatability.py`'s stage-1 check, backing the paper's
+  bit-identical-update theorem) rebuilds a commitment from scratch under
+  the same pinned salts and expects an exact match. That only works today
+  because H1 *and* H2 are both pure functions of the item plus the pinned
+  salts — true H2 randomness breaks it unless a second pinning mechanism
+  (mirroring `batch_salts`) is added for H2 draws specifically.
+
+Asked the user how to handle the rebuild-equivalence break; they picked
+"add H2-seed pinning for reproducibility" (production draws stay truly
+random; a caller can optionally re-supply the exact draws to rebuild a
+specific commitment bit-for-bit, the same pattern `batch_salts` already
+uses for `S0`). Before implementing that, the user reconsidered the goal
+itself — the actual entropy gap they cared about was narrower than all of
+`hm2`: only the *edge* (decoy) digits needed to be truly random, not H2 as
+a whole — and asked to abort the change entirely rather than build the
+pinning mechanism for a broader change than intended. **No code was
+touched for this entry** — `ms6/core.py` was never edited; the design
+discussion and the reason for aborting are recorded here so the "H2 could
+be made random, but rebuild-equivalence needs seed-pinning to survive it"
+trade-off doesn't have to be rediscovered if this comes up again with a
+narrower (edge-digits-only) scope.
+
+# Part G — a real domain hash (SHAKE128), replacing the digit-substitution `hash()` for item digests
+
+## 51. `Utils.domain_hash` (SHAKE128) replaces `hash()` for H1/H2; comment cleanup
+
+**Request** — "what about shake_128?" (following a design discussion on
+whether a true cryptographic hash could feed the accumulator grid), then
+"please implement the shake128 and measure the performance. add the
+changes to the ms6-shake128 branch," then "cleanup comments and remove
+any stalled comments and copy the chat history to the ms_vibe.md."
+
+`utils6.Utils.hash()` — used for H1/H2 up to this point — is not actually
+a cryptographic hash: it substitutes each decimal digit of `val` with a
+fixed public weight (`P[d] = vsum_level(k, values=nums[d])` over a
+10-element lookup) and reassembles positionally. No avalanche effect
+(changing digit `e` of `val` only touches term `e` of the sum), no
+preimage/collision-resistance argument — which is exactly why the eprint's
+`Open Problem~\ref{op:hash}` flagged domain-hash collision resistance as
+an unproven assumption rather than a proven one.
+
+- New `Utils.domain_hash(data)` in both `ms6/utils6.py` and
+  `vs6/utils6.py`: SHAKE128 digest of `data` (bytes), zero-padded to a
+  FIXED width (`DOMAIN_HASH_DIGITS`, from `DOMAIN_HASH_BYTES=32`) decimal
+  digit string. SHAKE128 over SHAKE256: this scheme already treats
+  item-digest collision resistance as an ordinary, independent assumption
+  (separate from `DIGIT_PRIMES`' own injectivity argument), so 128-bit
+  collision resistance is a deliberate target — the same effective floor
+  SHA-256 itself has under the generic birthday bound — traded for
+  SHAKE128's meaningfully larger rate (smaller 256-bit vs. 512-bit
+  capacity).
+- `ms6.core._hash_item`: `H1 = domain_hash(H1_TAG:val)`, `H2 =
+  domain_hash(H2_TAG:H1)` — both real, tagged hashes, not H2 nesting the
+  old digit-substitution transform inside itself. `hash()` itself is
+  UNCHANGED and still used elsewhere (seal-tree fold, hmax sizing) — this
+  only replaced its use for item-level H1/H2.
+- `vs6.core._vs6_batch` mirrors H1 derivation via the same `domain_hash`/
+  `H1_TAG` so a claimed item's H1 independently reproduces; vs6 has no
+  `H2_TAG` copy since H2/`accS`/`S` are prover-only and never
+  reconstructed there.
+- Fixed-width output is a real behavioral change, not just an
+  implementation detail: every item's H1/H2 are now exactly
+  `DOMAIN_HASH_DIGITS` digits regardless of the item's own magnitude,
+  unlike the old `hash()`'s input-magnitude-scaling width. Confirmed
+  empirically (`len(h1) == 78` for both `mk(12345)` and `10**600+777`).
+  One test relied on the old scaling behavior and broke as a result:
+  `tests/test_updatability.py`'s `_check_fits` guard test used to force an
+  oversized digest via an explicitly huge VALUE (`10**600+777`) — that no
+  longer works, since no value can overflow a fixed-width digest.
+  Reworked to trigger the guard by temporarily shrinking a batch's `x`
+  directly instead (`_check_fits` raises before any mutation, so this is
+  safe/reversible) — still exercises the same guard logic for the
+  scenario it exists for.
+- `tests/test_adversarial.py`'s fabricated-value fixtures and
+  `tests/test_parity.py`'s ms6/vs6 output-parity comparison both updated
+  to route through `domain_hash` instead of `hash()`.
+- Comment sweep for staleness after the change: only one stale comment
+  found across `ms6/*.py`, `vs6/*.py`, `tests/*.py` —
+  `tests/bench.py`'s replacement-value comment, which explained picking a
+  same-magnitude replacement specifically to avoid overflowing
+  `_check_fits` via `hash()`'s old width-scaling behavior. Updated to
+  reflect that no value can trigger that anymore. Every other docstring
+  touched by the change (`_hash_item`, `_item_rows`, `_rows_from_hash`,
+  `_ms6_batch`'s x-sizing block, `Commitment`/`_check_fits`, `H1_TAG`/
+  `H2_TAG`, `domain_hash` itself, `vs6.core._vs6_batch`) was already
+  accurate — written alongside the code rather than after it.
+
+### Measured — 2026-08-12
+
+Isolated H1+H2 hashing, 50,000 items: old `hash()` 12.43us/item vs. new
+`domain_hash` 1.89us/item — **~6.6x faster** (SHAKE128's C implementation
+vs. a pure-Python digit-substitution transform).
+
+Full pipeline (`docs/bench_efficiency.py`, 2048-bit modulus arm, before
+vs. after, same 120,000-item registry): commit 1866ms → 1507ms (19%
+faster), build 145ms → 110ms (24% faster), prove 283ms → 269ms (5%
+faster), verify 163ms → 157ms (4% faster), append/replace ~10% faster.
+Commit/build show the largest gains since they hash every item directly;
+prove/verify are dominated by modular exponentiation, so hashing is a
+smaller slice of their cost. No operation got slower — this was a
+straight win on both security (real collision resistance vs. a bespoke
+transform) and speed.
+
+### Verified — 2026-08-12
+
+- `python3 -m tests`, three consecutive runs: all green.
+- Committed on a new `ms6-shake128` branch (off `rand-edge`, on top of
+  entry 48's revert), verified green again on the exact committed tree.
+  Push to GitHub not possible from this sandbox (no credentials) — same
+  environment limitation noted in entries 19/20; push manually.

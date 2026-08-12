@@ -10,11 +10,12 @@ from tests.harness import Commitment, D, Q, mk  # noqa: F401
 
 def run(check=None):
     U = Commitment([mk(i) for i in range(600)], D, Q, chunk_size=40, batch_size=20)
-    # A same-magnitude-class replacement, not mk(4242): mk(i)'s hash width
-    # grows with i (see _check_fits), so a value from a far larger i would
-    # legitimately overflow index 300's batch -- this timing probe isn't
-    # exercising that guard, just the replace-vs-recommit cost, so it needs
-    # a value that actually fits.
+    # XORing mk(300) rather than picking an unrelated value: item digests
+    # now come from Utils.domain_hash (SHAKE128, fixed-width), so unlike
+    # the old hash()'s input-magnitude-scaling width, no value can overflow
+    # _check_fits's guard anymore regardless of magnitude -- this timing
+    # probe just wants a value distinct from the original at index 300,
+    # not a specific magnitude class.
     t0 = time.time(); U.replace(300, mk(300) ^ 0xABCDEF1234567); t_upd = time.time() - t0
     t0 = time.time()
     Commitment(U.vals, D, Q, chunk_size=40, batch_size=20, s_mod=U.s_mod)
