@@ -66,11 +66,12 @@ def run(check):
     # -- _check_fits guard: replace() must refuse a value whose hash needs
     # more rows than its batch's current x, rather than silently truncate
     # its low-order digits (see _check_fits's own docstring). Index 0 sits
-    # in a batch sized from small mk(i) items; mk(777) is one of this
-    # suite's deliberately much-larger-magnitude values (see stage 1/2
-    # comments), so it should overflow that batch's x and be rejected.
+    # in a batch sized from small mk(i) items. mk()'s whole family is capped
+    # at 2**120 regardless of i, so no mk(i) reliably overflows another once
+    # real_width (chunk_size - rand_edge_size) shrank the margin -- an
+    # explicitly oversized value, independent of mk(), is used instead.
     try:
-        B.replace(0, mk(777))
+        B.replace(0, 10 ** 600 + 777)
         guard_rejected = False
     except ValueError:
         guard_rejected = True

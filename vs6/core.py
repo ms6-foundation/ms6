@@ -35,6 +35,8 @@ script (there's no module-top-level multiprocessing call here), but a
 top-level code with `if __name__ == "__main__":` for correctness on macOS/
 Windows (spawn start method) -- see ms6.py's and the demo files' own notes.
 """
+import hashlib
+
 from . import utils6 as u
 from .utils6 import _s
 
@@ -54,6 +56,34 @@ DEFAULT_MOD = u.DEFAULT_MOD
 
 ut = u.Utils()
 
+# EDGE-COLUMN DECOY PADDING -- vs6's own copy of ms6.core's constants/
+# helpers (see that module's own comment for the full rationale). Must stay
+# numerically/textually identical to ms6's copy -- H_EDGE_TAG in particular,
+# since interlace_mod has to reproduce a claimed item's own decoy digits
+# byte-for-byte from the claim alone.
+DEFAULT_RAND_EDGE_SIZE = 6
+H_EDGE_TAG = "ms6-edge-h"
+
+
+def _front_back_edge_counts(rand_edge_size):
+    return rand_edge_size // 2 + rand_edge_size % 2, rand_edge_size // 2
+
+
+def _edge_digits(digit_str, row_index, n, tag):
+    if n <= 0:
+        return ""
+    nbytes = max(n, 8)
+    digest = hashlib.shake_256(f"{tag}:{row_index}:{digit_str}".encode()).digest(nbytes)
+    return str(int.from_bytes(digest, "big")).zfill(n * 4)[-n:]
+
+
+def _attach_edges(row, digit_str, row_index, rand_edge_size, tag):
+    if rand_edge_size <= 0:
+        return row
+    front_n, back_n = _front_back_edge_counts(rand_edge_size)
+    edge = _edge_digits(digit_str, row_index, rand_edge_size, tag)
+    return edge[:front_n] + row + edge[front_n:]
+
 
 # Must match ms6.PARAM_KEYS. Duplicated rather than imported, in keeping with
 # this module's zero-prover-dependency goal (see the module docstring).
@@ -63,7 +93,7 @@ ut = u.Utils()
 # that has agreed public parameters out of band should compare `params`
 # against them before calling vs6, rather than accepting whatever d/q/mod the
 # prover supplies.
-PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size")
+PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
 
 
 def _brief(v):
@@ -106,6 +136,13 @@ def _validate_params(params, expect=None):
             raise ParamMismatch(f"params[{k!r}] must be a positive int, got {v!r}")
     if not isinstance(params["mod"], int) or params["mod"] < 2:
         raise ParamMismatch(f"params['mod'] must be an int >= 2, got {params['mod']!r}")
+    red = params["rand_edge_size"]
+    if not isinstance(red, int) or red < 0:
+        raise ParamMismatch(f"params['rand_edge_size'] must be a non-negative int, got {red!r}")
+    if red >= params["chunk_size"]:
+        raise ParamMismatch(
+            f"params['rand_edge_size'] ({red}) must be smaller than chunk_size "
+            f"({params['chunk_size']}) -- it can't consume the whole row")
 
     if expect:
         unknown = [k for k in expect if k not in PARAM_KEYS]
@@ -147,7 +184,7 @@ def _permute_row(row, perm):
     return ''.join(row[p] for p in perm)
 
 
-def interlace_mod(hm, x, chunk_size, k1, mod, perm=None):
+def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
     """Builds vs6's M: for each of the x rows, the product over every
     claimed value's digit at that row/column, each raised to k1, mod `mod`.
     This is vs6's own reconstruction of the claimed items' contribution to
@@ -161,16 +198,25 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None):
     _ms6_batch used (see ms6.py's _column_perm) -- applied here to each
     claimed value's own chunked rows before the column-wise power/multiply,
     so M's columns line up with the same real digit positions ps6's
-    row[j]/S[j] do.
+    row[j]/S[j] do. chunk_of is narrowed to chunk_size - rand_edge_size and
+    the SAME deterministic decoy digits ms6's _ms6_batch attached (see
+    _attach_edges/_edge_digits) are attached here too, AFTER permuting --
+    this is what lets a claimed item's edge columns reconstruct
+    byte-for-byte even though those columns were never real per-item
+    digest data to begin with (see ms6.core's own comment on why the
+    decoys must be deterministic, not secret-random).
     """
-    iden = u.PAD * chunk_size
-    chunk_of = chunks(iden, x, chunk_size)
+    real_width = chunk_size - rand_edge_size
+    iden = u.PAD * real_width
+    chunk_of = chunks(iden, x, real_width)
 
     def rows_of(val):
         # val is already a digit string: routing it through int() would
         # discard leading zeros, which now index a prime like any other digit
         rows = chunk_of(val)[:x]
-        return [_permute_row(r, perm) for r in rows] if perm is not None else rows
+        permuted = [_permute_row(r, perm) for r in rows] if perm is not None else rows
+        return [_attach_edges(row, val, i, rand_edge_size, H_EDGE_TAG)
+                for i, row in enumerate(permuted)]
 
     def base(ch):
         """Digit -> its own prime; padding -> 1 (contributes nothing).
@@ -243,7 +289,8 @@ def _get_batch_ids(indices, batch_size=DEFAULT_BATCH_SIZE):
     return [index // batch_size for index in indices]
 
 
-def _vs6_batch(ps, vals, x, chunk_size, d, workers=DEFAULT_WORKERS, mod=DEFAULT_MOD, q=None, perm=None):
+def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAULT_MOD, perm=None,
+               rand_edge_size=0):
     """Single-batch reconstruction: returns the batch's own h instead of
     asserting against anything, so vs6() below can fold every batch's h
     together and do one final check against c.
@@ -260,15 +307,13 @@ def _vs6_batch(ps, vals, x, chunk_size, d, workers=DEFAULT_WORKERS, mod=DEFAULT_
     so M lines up column-for-column with ps6's already-permuted row[j]/
     S[j].
     """
-    if q is None:
-        q = d ** 2
 
     # interlace's exponent must match ps6/ms6's q, so M[j] = prod over
     # claimed iset items of digit_j**q -- exactly the factor ps6 deliberately
     # left out (see ps6's _ps6_batch docstring for why).
     if vals:
         hm = [_s(ut.hash(val)) for val in vals]
-        M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm)
+        M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm, rand_edge_size=rand_edge_size)
     else:
         M = [[1] * chunk_size for _ in range(x)]
 
@@ -336,7 +381,7 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
     parallelism inside _vs6_batch is only used when a single batch is
     touched.
     """
-    d, q, chunk_size, batch_size, mod, seal_batch_size = unpack_params(params, expect)
+    d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size = unpack_params(params, expect)
     assert len(ps_list) == len(x_list)
 
     per_batch_vals = [[] for _ in ps_list]
@@ -350,16 +395,16 @@ def vs6(c, claims, ps_list, x_list, perm_list, params, workers=DEFAULT_WORKERS, 
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futures = {
-                b: ex.submit(_vs6_batch, ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d,
-                             1, mod, q, perm_list[b])
+                b: ex.submit(_vs6_batch, ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d, q,
+                             1, mod, perm_list[b], rand_edge_size)
                 for b in touched
             }
             for b, fut in futures.items():
                 h_list[b] = fut.result()
     else:
         for b in touched:
-            h_list[b] = _vs6_batch(ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d,
-                               workers=workers, mod=mod, q=q, perm=perm_list[b])
+            h_list[b] = _vs6_batch(ps_list[b], per_batch_vals[b], x_list[b], chunk_size, d, q,
+                               workers=workers, mod=mod, perm=perm_list[b], rand_edge_size=rand_edge_size)
 
     h = _seal_batch(h_list, chunk_size, max(x_list), d, q, mod, seal_batch_size)
     assert h == c

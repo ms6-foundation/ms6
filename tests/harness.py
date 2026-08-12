@@ -27,7 +27,7 @@ DEFAULT_MOD, ut, gen = M.DEFAULT_MOD, M.ut, M.gen
 # equivalences, not throughput, and every one of them runs a real
 # commit/open/verify.
 D, Q = 3, 10
-U_CS, U_BS = 12, 5
+U_CS, U_BS = 20, 5
 
 
 def mk(i):

@@ -40,36 +40,21 @@ DEFAULT_SEAL_MOD_BITS = 256
 # the exact same value or verification of honest proofs fails.
 DEFAULT_MOD = u.DEFAULT_MOD
 
-# Modulus for building S (the secret-salt blinding grid) in _ms6_batch,
-# separate from DEFAULT_MOD so S's ring can be chosen independently of the
-# H-side accumulator ring -- e.g. a safe prime, where the subgroup order has
-# a large prime factor.
+# Modulus for building S (the secret-salt blinding grid) in _ms6_batch.
+# Reuses DEFAULT_MOD rather than a separate ring: S's *value* travels to
+# ps6 in s_list and is used there as a base in the mod-DEFAULT_MOD ring
+# (pow(S[j], d, mod)), so ps6/vs6 need no separate knowledge of this
+# constant -- only ms6-side code (_s0_grid, _seal_grid) ever reduces mod
+# s_mod directly. Nothing requires the two rings to match; sharing one
+# keeps the parameter surface smaller at no cost, since both are sized
+# for the same reason (cheap modular arithmetic -- see DEFAULT_MOD's own
+# comment in utils6.py).
 #
-# ps6/vs6 need NO matching change: S's *value* is carried in s_list, and both
-# ms6 and ps6 use that same integer as a base in the mod-DEFAULT_MOD ring
-# (pow(S[j], d, mod)), so how the value was derived never enters the check.
-#
-# S's ring is the SAME unknown-order composite as the H side, and this is
-# now the default for every commit (ms6() no longer generates a per-commit
-# prime for it).
-#
-# TRADE-OFF, deliberately made. S's ring used to be a freshly generated
-# 512-bit prime, secret per commit and never shared with the verifier. That
-# secrecy is gone; this modulus is public. What replaces it is hardness:
-# with phi(n) unknown, an attacker holding S[j] cannot unwind it through
-# cell_product_mod to recover accS's counts, whereas a public prime ring
-# would have let them.
-#
-# The two cannot be combined. A per-commit SECRET unknown-order modulus
-# would mean generating an RSA modulus per commit, and whoever generated it
-# would hold p and q -- a trapdoor that permits exactly the root extraction
-# the H-side change exists to prevent. Unknown order therefore requires a
-# public nothing-up-my-sleeve value, not a secret one.
-#
-# What did NOT change: commitments over the same data are still unlinkable,
-# because the per-batch salt is still drawn fresh and S0 is a SHAKE-256
-# expansion of it (see _s0_grid). The salt, not the modulus, is what makes
-# two commits of the same data differ.
+# S is never sent to the verifier: only ps6's already-aggregated buckets
+# are, and vs6 never reads s_mod or S directly. What makes two commits of
+# the same data unlinkable is S0, the per-cell blinding seed expanded
+# fresh from each commit's own salt -- see _s0_grid's own docstring --
+# not this modulus.
 DEFAULT_S_MOD = DEFAULT_MOD
 
 # Exponent used when folding accS's digit counts into S, the S-side
@@ -92,10 +77,78 @@ DEFAULT_S_MOD = DEFAULT_MOD
 # _seal_grid, and a changed s_q would rebuild S differently and invalidate
 # the commitment. Commitment therefore captures it at construction rather
 # than reading the constant afresh.
-DEFAULT_S_Q = 10
+DEFAULT_S_Q = 7
 
 DEFAULT_S_EXP = 3
 DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
+
+# EDGE-COLUMN DECOY PADDING -- closes the singleton-bucket leak (see
+# mul_combinations_mod's KNOWN LEAK docstring) at the DATA level instead of
+# the arithmetic level: eval_level_mod/mul_combinations_mod are untouched,
+# and instead the real per-item digit data simply never reaches the
+# logical columns those two functions always expose (0, 1, chunk_size-2,
+# chunk_size-1 at d=3; the cascade reaches deeper at larger d).
+#
+# chunk_of only ever encodes chunk_size - rand_edge_size REAL columns now;
+# the outer rand_edge_size columns (split front/back, see
+# _front_back_edge_counts) are filled with digits that are deterministic
+# but carry NO information about the item's real H1/H2 digest -- derived
+# via SHAKE-256 from the digest string itself plus a domain-separating
+# tag, the same pattern _s0_grid already uses for S's own per-cell
+# blinding. Deterministic (not secret-random) is required, not a
+# simplification: vs6's interlace_mod independently re-derives a claimed
+# item's own row contribution from the claim alone (see its docstring), so
+# whatever fills these columns must be something the VERIFIER can also
+# recompute from public data -- true secret randomness would make every
+# proof touching a claimed item unverifiable.
+#
+# rand_edge_size must comfortably exceed the singleton-bucket cascade
+# depth for whatever `d` is in use (2*(d-1) columns from each edge, per
+# mul_combinations_mod's docstring) -- 6 covers d up to 4 with margin at
+# the library's own default chunk_size=40.
+DEFAULT_RAND_EDGE_SIZE = 6
+
+# Domain-separation tags for edge-digit derivation: H_EDGE_TAG for hm1 (the
+# H/accH side, which vs6.interlace_mod must reproduce for claimed items)
+# and S_EDGE_TAG for hm2 (the S/accS side, prover-only -- vs6 never
+# reconstructs S, so this one has no cross-package agreement obligation,
+# but stays deterministic anyway for uniformity and so _item_rows/
+# _ms6_batch never disagree with each other on it).
+H_EDGE_TAG = "ms6-edge-h"
+S_EDGE_TAG = "ms6-edge-s"
+
+
+def _front_back_edge_counts(rand_edge_size):
+    """rand_edge_size split as (front, back): ceil(n/2) toward the
+    beginning, floor(n/2) toward the end -- e.g. 5 -> (3, 2)."""
+    return rand_edge_size // 2 + rand_edge_size % 2, rand_edge_size // 2
+
+
+def _edge_digits(digit_str, row_index, n, tag):
+    """n deterministic decimal-digit characters, reproducible by anyone
+    who knows digit_str (an item's own H1 digest string -- public once
+    hashed/claimed) -- via SHAKE-256, independent of chunk_of's real
+    per-column digits. row_index separates a multi-row item's rows from
+    each other; `tag` separates the H-side and S-side derivations."""
+    if n <= 0:
+        return ""
+    nbytes = max(n, 8)
+    digest = hashlib.shake_256(f"{tag}:{row_index}:{digit_str}".encode()).digest(nbytes)
+    return str(int.from_bytes(digest, "big")).zfill(n * 4)[-n:]
+
+
+def _attach_edges(row, digit_str, row_index, rand_edge_size, tag):
+    """Widen one already-permuted, narrow (chunk_size - rand_edge_size)
+    real row back to chunk_size by prepending/appending deterministic
+    decoy digits. Must run AFTER permutation, not before: the decoys have
+    to land at the true logical edges (index 0 / chunk_size-1) regardless
+    of how _column_perm shuffled the real columns, since that's exactly
+    where eval_level_mod/mul_combinations_mod's singleton buckets look."""
+    if rand_edge_size <= 0:
+        return row
+    front_n, back_n = _front_back_edge_counts(rand_edge_size)
+    edge = _edge_digits(digit_str, row_index, rand_edge_size, tag)
+    return edge[:front_n] + row + edge[front_n:]
 
 # NOTE: vs6 (the verifier) now lives in its own module, vs6.py, paired with
 # vs6/utils6.py -- a self-contained package with zero import
@@ -121,15 +174,17 @@ DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
 #   s_exp, pad_size,
 #   keep_hm           prover-only, never consulted by ps6/vs6
 #   workers           a local performance choice; each party picks its own
-PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size")
+PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
 
 
 def make_params(d, q, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
-                mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+                mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE,
+                rand_edge_size=DEFAULT_RAND_EDGE_SIZE):
     """The public parameter set, as returned by ms6() and consumed by
     ps6()/vs6()."""
     return {"d": d, "q": q, "chunk_size": chunk_size, "batch_size": batch_size,
-            "mod": mod, "seal_batch_size": seal_batch_size}
+            "mod": mod, "seal_batch_size": seal_batch_size,
+            "rand_edge_size": rand_edge_size}
 
 
 def _brief(v):
@@ -172,6 +227,13 @@ def _validate_params(params, expect=None):
             raise ParamMismatch(f"params[{k!r}] must be a positive int, got {v!r}")
     if not isinstance(params["mod"], int) or params["mod"] < 2:
         raise ParamMismatch(f"params['mod'] must be an int >= 2, got {params['mod']!r}")
+    red = params["rand_edge_size"]
+    if not isinstance(red, int) or red < 0:
+        raise ParamMismatch(f"params['rand_edge_size'] must be a non-negative int, got {red!r}")
+    if red >= params["chunk_size"]:
+        raise ParamMismatch(
+            f"params['rand_edge_size'] ({red}) must be smaller than chunk_size "
+            f"({params['chunk_size']}) -- it can't consume the whole row")
 
     if expect:
         unknown = [k for k in expect if k not in PARAM_KEYS]
@@ -287,11 +349,7 @@ def _s0_grid(s, batch_index, rows, chunk_size, s_mod):
 def _hash_item(val, s_exp):
     """One item's two independent hash-digit strings -- H1 (feeds accH, the
     primary commitment grid) and H2 = hash(H1, s_exp) (feeds accS, the
-    blinding-side accumulator) -- with the '0' digit remapped to '1'
-    throughout ('0' would annihilate its own column's product outright
-    rather than contributing neutrally; '1' contributes nothing either,
-    since 1**k == 1, so it doubles as the "blank" digit used everywhere in
-    this codebase, e.g. `iden`).
+    blinding-side accumulator).
 
     Split out of _item_rows so _ms6_batch can measure every item's actual
     digest width BEFORE deciding how many rows (x) this batch's grid
@@ -302,17 +360,35 @@ def _hash_item(val, s_exp):
     return h1s, h2s
 
 
-def _item_rows(val, chunk_of, perm, s_exp):
-    """One item's permuted digit rows for the H side (hm1) and the S side
-    (hm2), against an ALREADY-SIZED chunk_of (x fixed). Factored out of
-    _ms6_batch's own loop so the incremental update path (Commitment.
-    append/replace) derives an item's contribution the exact same way the
-    original commit did -- the two must agree character-for-character or
-    the counts they add and subtract won't cancel."""
-    h1s, h2s = _hash_item(val, s_exp)
-    hm1 = [_permute_row(r, perm) for r in chunk_of(h1s)]
-    hm2 = [_permute_row(r, perm) for r in chunk_of(h2s)]
+def _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size):
+    """Permuted, edge-padded digit rows for H (hm1) and S (hm2), from an
+    item's already-computed hash strings. chunk_of/perm must already be
+    sized to the REAL width (chunk_size - rand_edge_size); decoy digits
+    are attached via _attach_edges AFTER permutation, so they land at the
+    true logical edges regardless of how the real columns were shuffled.
+    Shared by _item_rows (fresh hash) and _ms6_batch's own loop
+    (pre-hashed, for the x-sizing reason documented there) so both derive
+    an item's contribution identically -- the two must agree character-
+    for-character or the counts they add and subtract won't cancel."""
+    real1 = [_permute_row(r, perm) for r in chunk_of(h1s)]
+    real2 = [_permute_row(r, perm) for r in chunk_of(h2s)]
+    hm1 = [_attach_edges(row, h1s, i, rand_edge_size, H_EDGE_TAG) for i, row in enumerate(real1)]
+    hm2 = [_attach_edges(row, h2s, i, rand_edge_size, S_EDGE_TAG) for i, row in enumerate(real2)]
     return hm1, hm2
+
+
+def _item_rows(val, chunk_of, perm, s_exp, rand_edge_size=0):
+    """One item's permuted, edge-padded digit rows for the H side (hm1)
+    and the S side (hm2), against an ALREADY-SIZED, ALREADY-NARROWED
+    (chunk_size - rand_edge_size) chunk_of/perm pair (x fixed). See
+    _rows_from_hash for the shared logic; this just adds the fresh hash
+    step. Factored out of _ms6_batch's own loop so the incremental update
+    path (Commitment.append/replace) derives an item's contribution the
+    exact same way the original commit did -- the two must agree
+    character-for-character or the counts they add and subtract won't
+    cancel."""
+    h1s, h2s = _hash_item(val, s_exp)
+    return _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size)
 
 
 def _apply_rows(cnt, rows, sign):
@@ -359,7 +435,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
 
 
 def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
-               s_q=DEFAULT_S_Q,
+               s_q=DEFAULT_S_Q, rand_edge_size=DEFAULT_RAND_EDGE_SIZE,
                keep_hm=DEFAULT_KEEP_HM, workers=DEFAULT_WORKERS, batch_index=0, batch_salt=None):
     """Commits a single batch: builds its own accH/accS/S0 from just the
     `vals` it's given, and returns that batch's own h.
@@ -375,8 +451,9 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # columns -- every batch here shares one `s` (ms6 passes the same s to
     # every _ms6_batch call), so without this, perm would be identical
     # across the whole commit. See _column_perm's docstring.
-    perm = _column_perm(s * 1_000_000_007 + batch_index, chunk_size)
-    iden = u.PAD * chunk_size
+    real_width = chunk_size - rand_edge_size
+    perm = _column_perm(s * 1_000_000_007 + batch_index, real_width)
+    iden = u.PAD * real_width
 
     # Every item is hashed once, up front, so x (this batch's row count)
     # can be sized from the ACTUAL digests in play, rather than guessed at.
@@ -404,7 +481,11 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     # only the grid's row *count* stopped taking its size from the salt.
     hashed = [_hash_item(val, s_exp) for val in vals]
     widest = max((len(h) for pair in hashed for h in pair), default=1)
-    rows = max(1, -(-widest // chunk_size))                # ceil(widest / chunk_size)
+    # ceil(widest / real_width), NOT chunk_size: each row only carries
+    # real_width real digits now (the rest is edge padding), so sizing
+    # against the full chunk_size would under-count rows needed and
+    # silently truncate a wide digest's low-order chunks.
+    rows = max(1, -(-widest // real_width))
 
     S0 = _s0_grid(s, batch_index, rows, chunk_size, s_mod)
     x = len(S0)
@@ -412,10 +493,9 @@ def _ms6_batch(vals, chunk_size, d, q, s, s_exp=DEFAULT_S_EXP, mod=DEFAULT_MOD, 
     accS = u.Acc(x, chunk_size)
 
     hm = []
-    chunk_of = chunks(iden, x, chunk_size)
+    chunk_of = chunks(iden, x, real_width)
     for t, (h1s, h2s) in enumerate(hashed):
-        hm1 = [_permute_row(r, perm) for r in chunk_of(h1s)]
-        hm2 = [_permute_row(r, perm) for r in chunk_of(h2s)]
+        hm1, hm2 = _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size)
         if keep_hm:
             hm.append(hm1)
         accH.add(hm1)
@@ -553,7 +633,8 @@ def _seal_from_counts(cnt, chunk_size, d, q, mod):
 
 def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
         mod=DEFAULT_MOD, s_mod=None, s_q=DEFAULT_S_Q, keep_hm=DEFAULT_KEEP_HM,
-        workers=DEFAULT_WORKERS, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+        workers=DEFAULT_WORKERS, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE,
+        rand_edge_size=DEFAULT_RAND_EDGE_SIZE):
     """Splits vals into batch_size-sized groups and commits to each one
     independently via _ms6_batch, all under the same secret salt s. Every
     batch's h is already fully row-sealed before this function folds batches
@@ -567,8 +648,8 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     need it separately, since hm_list is already stored in permuted form.
 
     s_mod=None (the default) builds every batch's S grid in DEFAULT_S_MOD,
-    the same unknown-order composite the H side uses. It is deliberately not
-    returned and not placed in params: nothing downstream needs it. S's own
+    the same ring the H side uses. It is deliberately not returned and not
+    placed in params: nothing downstream needs it. S's own
     values travel to ps6 in s_list, and both ms6 and ps6 feed those integers
     to pow(S[j], d, mod) in the H-side ring, so how S was derived never
     enters the check -- ps6 does not need s_mod, and vs6 is never told it.
@@ -586,9 +667,7 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     """
     hmax = pad_size+int(str(ut.hash(ut.hash(max(vals),s_exp))))
 
-    # S's ring: the shared unknown-order composite, not a per-commit prime.
-    # See DEFAULT_S_MOD for why the per-commit secret was given up for
-    # hardness, and why the two cannot both be had.
+    # S's ring: shared with the H side by default -- see DEFAULT_S_MOD.
     if s_mod is None:
         s_mod = DEFAULT_S_MOD
 
@@ -612,16 +691,16 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futures = [
                 ex.submit(_ms6_batch, vals[start:start + batch_size], chunk_size, d, q, s,
-                          s_exp=s_exp, mod=mod, s_mod=s_mod, s_q=s_q, keep_hm=keep_hm,
-                          workers=1, batch_index=batch_index)
+                          s_exp=s_exp, mod=mod, s_mod=s_mod, s_q=s_q, rand_edge_size=rand_edge_size,
+                          keep_hm=keep_hm, workers=1, batch_index=batch_index)
                 for batch_index, start in enumerate(starts)
             ]
             batch_results = [f.result() for f in futures]
     else:
         batch_results = [
             _ms6_batch(vals[start:start + batch_size], chunk_size, d, q, s, s_exp=s_exp,
-                       mod=mod, s_mod=s_mod, s_q=s_q, keep_hm=keep_hm, workers=workers,
-                       batch_index=batch_index)
+                       mod=mod, s_mod=s_mod, s_q=s_q, rand_edge_size=rand_edge_size,
+                       keep_hm=keep_hm, workers=workers, batch_index=batch_index)
             for batch_index, start in enumerate(starts)
         ]
 
@@ -633,7 +712,7 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         hm_list.append(hm_b)
         perm_list.append(perm_b)
 
-    params = make_params(d, q, chunk_size, batch_size, mod, seal_batch_size)
+    params = make_params(d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size)
     h = _seal_batch(h_list, chunk_size, max(x_list), d, q, mod, seal_batch_size)
 
     return h, h_list, x_list, s_list, hm_list, perm_list, params
@@ -774,7 +853,8 @@ class Commitment:
     def __init__(self, vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
                  chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE, mod=DEFAULT_MOD,
                  s_mod=None, s_q=DEFAULT_S_Q, workers=DEFAULT_WORKERS,
-                 batch_salts=None, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+                 batch_salts=None, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE,
+                 rand_edge_size=DEFAULT_RAND_EDGE_SIZE):
         """batch_salts pins each batch's salt instead of drawing fresh ones.
         Only for reproducing a commitment (the incremental-vs-from-scratch
         equivalence test relies on it); leave it None in normal use."""
@@ -786,6 +866,10 @@ class Commitment:
         self.chunk_size, self.batch_size = chunk_size, batch_size
         self.mod, self.workers = mod, workers
         self.seal_batch_size = seal_batch_size
+        # captured, not re-read from the constant: a changed
+        # DEFAULT_RAND_EDGE_SIZE would otherwise change which columns are
+        # decoy on the next reseal/update, corrupting this commitment.
+        self.rand_edge_size = rand_edge_size
         # captured, not re-read from the constant: a changed DEFAULT_S_Q
         # would otherwise rebuild S differently on the next reseal and
         # invalidate this commitment.
@@ -825,7 +909,8 @@ class Commitment:
         salt = self._next_salt(b)
         h, x, S, hm, perm, cntH, cntS, salt = _ms6_batch(
             batch_vals, self.chunk_size, self.d, self.q, self.s, self.s_exp,
-            mod=self.mod, s_mod=self.s_mod, keep_hm=True, workers=self.workers,
+            mod=self.mod, s_mod=self.s_mod, rand_edge_size=self.rand_edge_size,
+            keep_hm=True, workers=self.workers,
             batch_index=b, batch_salt=salt)
         self.vals.extend(batch_vals)
         self.salts.append(salt)
@@ -872,7 +957,7 @@ class Commitment:
             futures = [
                 ex.submit(_ms6_batch, group, self.chunk_size, self.d, self.q, self.s,
                           s_exp=self.s_exp, mod=self.mod, s_mod=self.s_mod,
-                          s_q=self.s_q, keep_hm=True, workers=1,
+                          s_q=self.s_q, rand_edge_size=self.rand_edge_size, keep_hm=True, workers=1,
                           batch_index=b0 + i, batch_salt=salts[i])
                 for i, group in enumerate(batch_groups)
             ]
@@ -896,7 +981,7 @@ class Commitment:
         """The public parameter dict for this commitment -- same contents
         ms6() returns, so ps6/vs6 are driven by it identically."""
         return make_params(self.d, self.q, self.chunk_size, self.batch_size,
-                           self.mod, self.seal_batch_size)
+                           self.mod, self.seal_batch_size, self.rand_edge_size)
 
     def opening(self):
         """(c, h_list, x_list, s_list, hm_list, perm_list, params) -- same
@@ -905,8 +990,9 @@ class Commitment:
                 self.perms, self.params)
 
     def _chunk_of(self, b):
-        iden = u.PAD * self.chunk_size
-        return chunks(iden, self.x_list[b], self.chunk_size)
+        real_width = self.chunk_size - self.rand_edge_size
+        iden = u.PAD * real_width
+        return chunks(iden, self.x_list[b], real_width)
 
     def _s0(self, b):
         # recomputed from the stored salt rather than kept resident: it's
@@ -982,7 +1068,8 @@ class Commitment:
             self._refresh_root(appended=True)
             return len(self.vals) - 1
 
-        hm1, hm2 = _item_rows(val, self._chunk_of(last), self.perms[last], self.s_exp)
+        hm1, hm2 = _item_rows(val, self._chunk_of(last), self.perms[last], self.s_exp,
+                              self.rand_edge_size)
         self._check_fits(last, val, hm1, hm2)
         _apply_rows(self.cntH[last], hm1, +1)
         _apply_rows(self.cntS[last], hm2, +1)
@@ -1005,8 +1092,8 @@ class Commitment:
         local = index - b * self.batch_size
         chunk_of, perm = self._chunk_of(b), self.perms[b]
 
-        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.s_exp)
-        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.s_exp)
+        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.s_exp, self.rand_edge_size)
+        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.s_exp, self.rand_edge_size)
         self._check_fits(b, new_val, new_h1, new_h2)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
@@ -1040,7 +1127,7 @@ class Commitment:
         local = index - b * self.batch_size
 
         old_h1, old_h2 = _item_rows(self.vals[index], self._chunk_of(b),
-                                    self.perms[b], self.s_exp)
+                                    self.perms[b], self.s_exp, self.rand_edge_size)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
 
@@ -1130,7 +1217,7 @@ def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=N
     pools; row-level parallelism inside _ps6_batch/_finish_ps6 is only
     used when a single batch is touched.
     """
-    d, q, chunk_size, batch_size, mod, _sbs = unpack_params(params, expect)
+    d, q, chunk_size, batch_size, mod, _sbs, _red = unpack_params(params, expect)
     iset = set(iset)
 
     boundaries = []

@@ -1456,6 +1456,263 @@ Added two checks to `test_adversarial`:
 
 ---
 
+
+# Part F — edge-column decoy padding, and a return to a prime modulus
+
+## 43. Benchmark performance pass; 256-bit vs 2048-bit comparison in the paper
+
+**Request** — "Any suggestion to improve the benchmark performance as the
+prime-digit-encoding has performance implication on commit," followed by
+"Run the benchmark DEFAULT_MODE 256 bit vs 2048 bit for workers=4 and
+update the Efficiency section in the ms6_eprint.tex."
+
+- Profiled commit end to end. `gmpy2`-specific tricks and a Shamir's-trick
+  multi-exponentiation variant were both dead ends for this workload.
+  `DEFAULT_WORKERS` sitting at `1` was the real lever: `workers=4` gave a
+  measured ~3.5x speedup on commit, independent of the prime-digit
+  encoding (entry 41) being in place or not.
+- Quantified entry 41's own regression directly, via a git-worktree A/B
+  (old encoding vs. new, same machine, same run): roughly 15–25% slower
+  commit, not the multiple this could plausibly have been, given the
+  encoding widened every cell's base count from four primes to ten.
+- Ran the full commit/prove/verify/build/append/replace suite at
+  `workers=4` under both the (then-current) RSA-2048 composite and a
+  256-bit prime, on the same 120,000-record synthetic registry, and wrote
+  the resulting ratios into `docs/ms6_eprint.tex`'s Efficiency section
+  (commit 1.50x, prove 3.42x, verify 2.19x, build 1.41x, append 1.29x,
+  replace 2.23x, composite over prime).
+
+### Verified — 2026-08-12
+
+- Suite green at `workers=1` and `workers=4`, before and after entry 41's
+  encoding change.
+- PDF recompiled cleanly with the new table; regenerated and handed off.
+
+---
+
+## 44. Leak-mitigation attempt: wrap the singleton value — reverted
+
+**Request** — "wrap single combination that causes the leaks with
+vsum_level_mod(d, mod, values) in eval_level_mod in ps6 and
+mul_combinations_mod in vs6," followed by two further variants after each
+attempt failed ("apply the similar fix for singleton bucket(s) in the
+vsum_level_fold_mod," then "change the _seal_grid/vsum_level_fold_mod with
+vsum_level_mod").
+
+- All three variants implemented and tested on a scratch copy
+  (`/tmp/ms6_leak_fix`), never touching the real repository directly.
+- Every variant broke completeness. The wrap function is not
+  multiplicative under the modulus — `wrap(a)*wrap(b) != wrap(a*b) mod n`,
+  confirmed empirically with a direct 20/20-mismatch test — while
+  `mul_combinations_mod`'s reconstruction on the verifier side is built on
+  exactly that multiplicativity (`pow(a,d)*pow(b,d) == pow(a*b,d)`). This
+  is the same shape of problem entry 24 hit and reverted from, one layer
+  further down the pipeline each time.
+
+**Request** — "revert the changes and I will wire it manually."
+
+- Scratch experiments discarded. `git status`/`git diff --stat` confirmed
+  the real `ms6/`/`vs6/` files carried no contamination — only the
+  pre-existing dirty state already on disk before this session (a stray
+  `DEFAULT_S_Q = 7` and a trimmed `_hash_item` docstring, unrelated to
+  this attempt).
+
+### Verified — 2026-08-12
+
+- `git diff --stat` against the real repo showed no trace of the reverted
+  attempts.
+
+---
+
+## 45. Edge-column decoy padding (the leak fix that shipped)
+
+**Request** — "pin point exact code where it causes the leaks," then:
+"Add random values at the edges of the bucket so the leaks only reveals
+the junk values and not the actuals. In the `_ms6_batch` get the
+`chunk_of` `chunk_size-rand_edge_size` and then fill random number
+towards both the ends. for example for `chunk_size=40`,
+`rand_edge_size=5` fill `rand_edge_size//2+rand_edge_size%2` towards
+beginning and `rand_edge_size//2` at the end of the bucket."
+
+Traced the leak precisely first: `eval_level_mod` (`ms6/utils6.py`) through
+`_finish_ps6`/`ps6()` (`ms6/core.py`) to `mul_combinations_mod`
+(`vs6/utils6.py`) to `tests/test_leak.py`'s extraction.
+
+Design shift from entries 24 and 44: instead of changing the combinatorial
+math (which broke multiplicativity twice), change *what data* occupies
+the leak-exposed columns, leaving `eval_level_mod`/`mul_combinations_mod`/
+`vsum_level_mod`/`vsum_level_fold_mod`/`_seal_grid` completely untouched.
+A decoy digit is just as valid a "digit 0–9" as a real one from
+`cell_product_mod`'s point of view, so the multiplicative identity the
+verifier relies on is never at risk.
+
+**Clarifying question asked** — deterministic, item-derived edge digits,
+or true secret randomness? `vs6`'s `interlace_mod` independently
+reconstructs a claimed item's row contribution from the claim alone, with
+no channel to secret prover-side randomness, so true randomness would
+break completeness at the edge columns for any claimed item.
+
+**Answer: deterministic, item-derived.**
+
+- `ms6/core.py`: `DEFAULT_RAND_EDGE_SIZE = 6`, `H_EDGE_TAG`/`S_EDGE_TAG`,
+  `_front_back_edge_counts` (front `= E//2 + E%2`, back `= E//2`, matching
+  the request's formula exactly), `_edge_digits` (SHAKE-256 over
+  `tag:row_index:digit_str`), `_attach_edges` (runs *after* permutation,
+  so decoys land at the true logical edges regardless of how
+  `_column_perm` shuffled the real columns). `_ms6_batch` now sizes rows
+  against `real_width = chunk_size - rand_edge_size` — a genuine sizing
+  bug was caught here: the old formula sized against the full
+  `chunk_size`, which would have silently truncated a wide digest's
+  low-order chunks once each row carried fewer real digits. `PARAM_KEYS`
+  grew from 6 to 7 entries; `Commitment` threads `rand_edge_size` through
+  construction, `append`/`replace`/`delete`, `_chunk_of`, and `params`.
+- `vs6/core.py`: mirrored helpers (H-side tag only — `S` is never
+  verifier-reconstructed). `interlace_mod` narrows to
+  `chunk_size - rand_edge_size` real columns and reattaches the same
+  deterministic decoys after permuting, so a claimed item's edge columns
+  reconstruct byte-for-byte on the verifier side.
+- `tests/harness.py`: `U_CS` widened 12 -> 20 for `real_width` headroom
+  under the new default `rand_edge_size=6`.
+- `tests/test_updatability.py`: the `_check_fits` over-wide-value guard
+  test relied on `mk(777)` reliably outsizing other `mk(i)` values; since
+  `mk()`'s magnitude is capped at `2**120` regardless of `i`, narrowing
+  `real_width` erased that margin. Swapped in an explicitly oversized
+  value (`10**600 + 777`) instead of relying on `mk()`'s incidental
+  hash-width behavior.
+- `tests/test_leak.py`: added `_decoy_only_col0`, which recomputes column
+  0's aggregate purely from `_edge_digits` — zero reference to any item's
+  real digest content beyond feeding it into that one public formula —
+  and asserts it matches the real pipeline's own `row[0]` exactly. This is
+  the actual security property the change buys: the singleton bucket is
+  still structurally present and still root-extractable, but what's in it
+  is now provably decoy.
+
+Implemented and fully verified on a scratch copy (`/tmp/ms6_edge`) before
+touching the real files, then applied file by file and re-verified against
+the real repository.
+
+### Verified — 2026-08-12
+
+- Full suite green on the scratch copy and, after applying, on the real
+  repository: completeness, roundtrip, adversarial (16 checks),
+  updatability (all three stages), modulus, seal tree, params, copy
+  parity, sizing, parallelism, and the rewritten leak tests (7 checks,
+  including the 2 new decoy-verification ones).
+
+---
+
+## 46. `DEFAULT_MOD` back to a 256-bit prime; comment cleanup; test rework
+
+**Request** — "now change the DEFAULT_MOD to 256 bit prime and cleanup the
+comments and removed any stalled comments."
+
+Entry 36 moved `DEFAULT_MOD` to the RSA-2048 composite specifically to make
+the singleton-bucket leak's root extraction expensive (unknown group
+order). Entry 45 closes that same leak a different way — by ensuring the
+exposed value is decoy regardless of how easy it is to extract — which
+makes the composite's cost no longer worth paying. Switched `DEFAULT_MOD`
+in both `ms6/utils6.py` and `vs6/utils6.py` to a fixed, verified 256-bit
+prime (`0xa4436df368a6037b5634e0c192096ad8a7289bf1af153aef98ed9c4cbac951e1`,
+confirmed prime and 256 bits directly), chosen for the arithmetic-cost win
+now that group order is no longer load-bearing.
+
+- Swept `ms6/core.py`, `vs6/core.py`, `ms6/utils6.py`, `vs6/utils6.py` for
+  comments whose rationale depended on "composite of unknown order buys
+  hardness" (`DEFAULT_S_MOD`'s trade-off block, the `DIGIT_PRIMES`
+  comment, `mul_combinations_mod`'s KNOWN LEAK docstring in both packages,
+  `ms6()`/`Commitment`'s S-ring comments) and rewrote them around the
+  current design: decoy padding closes the exposure; the modulus is
+  chosen for cost.
+- `tests/test_modulus.py` previously pinned `DEFAULT_MOD` to the specific
+  2048-bit RSA value and asserted it must stay composite — both now
+  false. Rewrote to assert a 256-bit prime, identical across the `ms6`/
+  `vs6` copies, and that arbitrary alternate moduli (prime or composite)
+  still verify — the property that was actually load-bearing.
+- `tests/test_leak.py`'s two-arm structure previously contrasted a
+  positive-control prime against the shipped RSA composite, asserting the
+  composite arm's extraction *must fail*. With `DEFAULT_MOD` itself now a
+  prime, that assertion no longer holds — extraction against it always
+  succeeds. Restructured: Arm 1 = `DEFAULT_MOD` itself (extraction
+  succeeds, checked against the decoy prediction and matches), Arm 2 = a
+  freshly generated unrelated composite each run (extraction fails,
+  demonstrating the decoy property doesn't depend on that failure — it's
+  asserted directly in both arms via `_decoy_only_col0`).
+
+### Verified — 2026-08-12
+
+- Full suite green after the modulus switch and after each round of
+  comment/test rework.
+
+---
+
+## 47. Paper rewrite: current design, not a changelog; new benchmark
+
+**Request** — "Update the paper without writing history to reflect the
+current design of the ps6 and add new benchmark," then "copy the chat
+history to the ms6_vibe.md and then push the changes to a new branch
+called rand-edge."
+
+`docs/ms6_eprint.tex` had been built, entry by entry, as a running record
+of an attack-then-fix cycle (its own title said as much: "...and a
+Differencing Attack on Its Hiding Property"). With entry 45's decoy
+padding in place, that framing was no longer accurate — the "attack"
+section described a confidentiality break the current construction does
+not have. Rewrote it to describe the current design directly:
+
+- Title: "...with Decoy-Padded Edge Columns," dropping the attack framing.
+- Status box and abstract rebuilt around the current claim: the
+  singleton-bucket exposure is structural and unremoved, but neutralized
+  at the data level, verified numerically rather than argued from modulus
+  hardness.
+- New parameter-table row for `rand_edge_size`; `DEFAULT_MOD`'s row and
+  the modulus remarks rewritten around a 256-bit prime chosen for cost.
+- New construction subsection formally describing the decoy mechanism,
+  with a stated theorem ("edge columns carry no real digest content") and
+  a remark on why the digits are deterministic rather than secret-random
+  — mirroring entry 45's own design reasoning.
+- The old "differencing attack" section restructured into "structural
+  exposure ... and its neutralization": kept the singleton-bucket
+  lemma/proposition/corollary (still correct math), reframed the old
+  `Attack`/`Theorem` pair as an `Observation` about what a differencing
+  ratio still computes and why it's now inert, and rewrote the
+  verification subsection around entry 46's two-arm test.
+- Removed the old "Toward a fix" section (the hidden-order-modulus
+  argument); folded what's still relevant into a remark on why the
+  modulus is chosen for cost now.
+- Binding section's "composite of unknown order" language generalized to
+  the modulus in general, since binding never depended on that choice.
+- Caught and fixed an unrelated pre-existing inconsistency while in the
+  file: the Notation section still claimed a `0`->`1` digit remap (a
+  9-way alphabet) from a much earlier design, contradicted by the Domain
+  Hash section and by the actual code (`DIGIT_PRIMES` has ten entries,
+  all ten digits used distinctly). Fixed both the claim and the
+  downstream "9-way search" wording.
+- New `docs/bench_efficiency.py` (committed for reproducibility), run at
+  `workers=4` under current defaults against the same 120,000-record
+  registry used in entry 43: commit 1.25s, prove 102ms avg, verify 81ms
+  avg, build 89ms, append 11.0ms, replace 13.6ms. Noted the decoy
+  padding's overhead is a fixed, small per-row constant (`E/L` = 15% more
+  columns at default sizing), not scale-dependent.
+- Related Work, Open Problems, and Conclusion updated to match — in
+  particular the open hiding-proof problem is now framed around the
+  domain hash's one-wayness rather than a factoring/RSA assumption on the
+  accumulator modulus, since that's the actual residual assumption left
+  once entry 45 is in place.
+
+This entry, and the rest of this file's history above it, is the "chat
+history" copied into `ms6_vibe.md` per the request — appended rather than
+replacing the existing log, matching this file's own running-log
+convention.
+
+### Verified — 2026-08-12
+
+- `pdflatex` (three passes, to settle cross-references): 19 pages, no
+  undefined references, no errors.
+- Full suite re-run after the paper changes (code untouched in this step):
+  still green.
+
+---
+
 # Open items
 
 - **The root-extraction leak (entry 23) is closed at the source and now
@@ -1483,3 +1740,20 @@ Added two checks to `test_adversarial`:
   two digits onto the same prime reopens a binding break, and it will not
   show up as a test failure anywhere except in the specific collisions
   `test_adversarial` pins.
+
+- **Update (entry 45): the root-extraction leak is now closed at the data
+  level, not just made expensive.** The bullet above (still accurate as a
+  record of where things stood after entry 38) reflected a design where
+  the singleton bucket's exposed value was real data, protected only by
+  the cost of extracting it. Entry 45 changes what fills that bucket:
+  the columns a root extraction can ever reach are reserved for digits
+  derived deterministically from the item's own hash, disjoint from where
+  real digit content is written. A successful extraction now recovers
+  decoy content regardless of how cheap or expensive extraction is —
+  verified directly (`_decoy_only_col0` in `tests/test_leak.py`), not
+  inferred from one modulus's arithmetic being hard. This is why entry 46
+  could move `DEFAULT_MOD` back to a 256-bit prime: the RSA-2048
+  composite's trust assumption (entry 27/36, restated above) is no longer
+  load-bearing for this property, so there's no reason to keep paying for
+  it. It remains true that binding (the bullet below) does not depend on
+  this choice either way.

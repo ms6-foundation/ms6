@@ -55,50 +55,28 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # ms6/ps6/vs6 is reduced by it, so no intermediate value grows with the
 # dataset.
 #
-# THIS IS THE RSA-2048 FACTORING CHALLENGE MODULUS -- a 617-digit / 2048-bit
-# COMPOSITE, published by RSA Laboratories in 1991 and never factored. It is
-# deliberately not a prime.
+# A fixed 256-bit prime. The singleton-bucket leak documented in
+# mul_combinations_mod's docstring is closed at the data level (see
+# ms6.core's EDGE-COLUMN DECOY PADDING): the columns a root extraction can
+# reach never carry real per-item digest data, regardless of the modulus,
+# so there is nothing to gain by making extraction expensive. That frees
+# the modulus to be chosen for cost alone -- modular exponentiation
+# dominates ps6/vs6, and a 256-bit prime is materially cheaper than a
+# wider modulus at every operation that scales with its bit length.
 #
-# Why a composite of unknown order. The documented leak in
-# mul_combinations_mod recovers a handful of columns per row by extracting
-# d-th roots out of singleton buckets. Mod a PRIME that is efficient at any
-# size, because the group order (p-1) is public: the attacker just computes
-# d^-1 mod (p-1) and exponentiates (measured earlier in this project: ~39 ms
-# against a 2048-bit prime). Widening the prime bought nothing. Mod a
-# composite whose factorisation nobody holds, phi(n) is unknown, there is no
-# exponent to invert, and extracting d-th roots is the RSA problem. That is
-# what closes the leak's mechanism -- not a parameter choice, a change of
-# group.
+# Prime rather than composite is not load-bearing either way -- no modular
+# inverse is ever taken mod this value (audited), so a composite would
+# drop in unchanged -- prime is simply the easier thing to generate and
+# verify: primality is checked directly (Miller-Rabin), where a trustworthy
+# composite of unknown order needs either a nothing-up-my-sleeve source or
+# a generation process nobody kept the factors from.
 #
-# TRUST ASSUMPTION, stated plainly: RSA-2048's factors are believed unknown
-# because RSA Security generated the challenge numbers and says it destroyed
-# them. You are trusting that claim. It is a far better position than a
-# locally generated modulus -- where whoever ran the generator could have
-# kept p and q, and could then forge -- but it is not zero-trust. Only a
-# class group of an imaginary quadratic field removes the trusted party
-# entirely, at the cost of slower arithmetic and a less familiar assumption.
-#
-# Nothing in this codebase requires the modulus to be prime: no modular
-# inverse is ever taken mod this value (audited), so the composite drops
-# straight in.
-#
-# Verified before adoption: 617 decimal digits; 2048 bits; composite by
-# Miller-Rabin (64 rounds); no factor below 100,000; Pollard rho finds
-# nothing in 200k iterations; and the value was cross-checked against an
-# independently written reconstruction, digit for digit.
-#
-# COST: modular exponentiation dominates ps6, so its cost tracks this
-# modulus's bit length -- roughly an order of magnitude above what a
-# 256-bit modulus would cost, with commit and verify affected far less.
-# The cost is of the WIDTH, not of the composite: a prime of the same size
-# performs the same and buys no hardness.
-DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
-
-# NOTE on older commitments: no constant is kept here for the primes this
-# replaced. None is needed -- ms6() records the modulus it used in the
-# params dict it returns, and ps6/vs6 read it from there, so a commitment
-# made under any earlier modulus still verifies from its own params. A
-# caller reproducing one just passes mod=<that value> explicitly.
+# Must stay numerically identical to ms6.utils6.DEFAULT_MOD -- see this
+# file's own module docstring for why the two copies exist and how they're
+# kept in lockstep. A caller free to ignore ms6()'s params dict can still
+# pass any mod= explicitly; a commitment records the modulus it used, and
+# ps6/vs6 read it from there rather than assuming this constant.
+DEFAULT_MOD = 0xa4436df368a6037b5634e0c192096ad8a7289bf1af153aef98ed9c4cbac951e1
 
 
 # Each decimal digit indexes its OWN prime, rather than being used as the
@@ -113,8 +91,9 @@ DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b
 # With one prime per digit the exponent vector (cnt_0..cnt_9) is recoverable
 # from the product over Z by unique factorisation, and finding a collision
 # mod n means exhibiting prod p_i^{d_i} = 1 with some d_i != 0 -- a
-# multiplicative relation among small primes modulo a composite of unknown
-# order, the assumption RSA accumulators already rest on.
+# multiplicative relation among small primes modulo n, the same discrete-log-
+# flavored assumption RSA-style accumulators rest on regardless of whether n
+# is prime or composite.
 DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
 
 # chunk_of pads short digests and narrow first chunks. Padding is
@@ -367,11 +346,13 @@ class Utils:
     def mul_combinations_mod(self, N, ps, vals, mod):
         """Modular counterpart of mul_combinations -- see ms6/utils6.py's copy
         for the full KNOWN LEAK docstring. In short: idx=0/1/N*(L-1)-1/
-        N*(L-1) are singleton buckets holding raw per-column values. Reading
-        them back means extracting an N-th root mod `mod`, which is free if
-        `mod` is prime and is the RSA problem if it is a composite of
-        unknown order -- as DEFAULT_MOD now is. The buckets are structural;
-        what the modulus decides is whether they can be inverted."""
+        N*(L-1) are singleton buckets holding raw per-column values, and
+        extracting an N-th root mod `mod` reads one back -- trivially if
+        `mod` is prime, harder if it's a composite of unknown order. The
+        buckets are structural, but the columns this reaches never carry
+        real per-item digest data in the first place (ms6.core's
+        EDGE-COLUMN DECOY PADDING), so what a successful extraction hands
+        back is decoy either way."""
         L = len(vals)
 
         powers = [[1] * (N + 1) for _ in range(L)]
