@@ -14,9 +14,9 @@ and the bank verifies it against the one published `c` -- never seeing
 any other customer's record, and paying a verification cost that does
 NOT grow with the size of the registry.
 
-  1. COMMIT  (registry operator, once):     c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(registry, d, q)
+  1. COMMIT  (registry operator, once):     c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(registry, d, q)
   2. PROVE   (registry operator, per request): ps_list = ps6(iset, h_list, hm_list, s_list, params)
-  3. VERIFY  (bank, per request):           vs6(c, claims, ps_list, x_list, perm_list, params)
+  3. VERIFY  (bank, per request):           vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params)
 
 ms6 splits the registry into BATCH_SIZE-sized groups and commits each
 independently before folding the per-batch results into one final `c`
@@ -25,11 +25,16 @@ below, that's 120 separate per-batch commitments folded into one. This
 demo builds a registry of 120,000 records and benchmarks all three
 stages.
 
-HONESTY NOTE: same caveat as zk_payroll_demo.py -- this is the project's
-research-prototype protocol, not an audited zk-SNARK. See
-mul_combinations_mod's "KNOWN LEAK" docstring in utils6.py: at this
-chunk_size/d, 4 of the 40 columns per row are recoverable via modular
-root extraction.
+HONESTY NOTE: same caveat as payroll_audit_demo.py -- this is the
+project's research-prototype protocol, not an audited zk-SNARK. At this
+chunk_size/d, 4 of the 40 columns per row are always recoverable via
+modular root extraction (mul_combinations_mod's documented structural
+exposure); the reference implementation neutralizes this at the data
+level (those columns never carry real digit content -- see docs/
+ms6_eprint.tex's decoy-padding section and README's Security section),
+verified numerically rather than merely argued. Binding still has no
+formal reduction, and whether repeated openings against one batch could
+leak more than a single opening does remains an open question.
 
 PLATFORM NOTE: ms6/ps6/vs6 use ProcessPoolExecutor for parallelism when
 workers>1. All executable code below is wrapped in `if __name__ ==
@@ -103,7 +108,7 @@ def main():
     # docstring for the x-sizing fix that makes this safe regardless of `s`.
     print()
     print("--- 1. COMMIT (registry operator, once) ---")
-    (c, h_list, x_list, s_list, hm_list, perm_list, params), t_commit = bench(
+    (c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params), t_commit = bench(
         "commit", lambda: ms6(registry, D, Q, chunk_size=CHUNK_SIZE, batch_size=BATCH_SIZE, workers=WORKERS))
     print(f"  -> commitment c published ({len(h_list)} batch(es) of up to {BATCH_SIZE} records each, "
           f"workers={WORKERS})")
@@ -118,7 +123,7 @@ def main():
             iset, h_list, hm_list, s_list, params, workers=WORKERS))
         claims = {j: registry[j] for j in iset}
         _, dt_verify = bench(f"  request {i}: verify (bank side)", lambda claims=claims, ps_list=ps_list: vs6(
-            c, claims, ps_list, x_list, perm_list, params, workers=WORKERS))
+            c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS))
         prove_times.append(dt_prove)
         verify_times.append(dt_verify)
 
@@ -130,7 +135,7 @@ def main():
 
     def expect_reject(label, claim):
         try:
-            vs6(c, claim, ps0, x_list, perm_list, params, workers=WORKERS)
+            vs6(c, claim, ps0, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
             print(f"  {label:<55} *** ACCEPTED (should have been rejected!) ***")
         except AssertionError:
             print(f"  {label:<55} REJECTED (correct)")
@@ -153,11 +158,11 @@ def main():
         lambda: Commitment(registry[:UPDATE_N], D, Q, chunk_size=CHUNK_SIZE, batch_size=BATCH_SIZE, workers=WORKERS))
 
     def verify_update(label, idxs, values, expect_accept):
-        c_u, h_u, x_u, s_u, hm_u, perm_u, params_u = live_registry.opening()
+        c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, params_u = live_registry.opening()
         claims = dict(zip(idxs, values))
         ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, workers=WORKERS)
         try:
-            vs6(c_u, claims, ps_u, x_u, perm_u, params_u, workers=WORKERS)
+            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False

@@ -7,35 +7,49 @@ specific values — without revealing anything else in the list, and without the
 verifier ever seeing the underlying data. Add, replace or delete items
 afterwards without recommitting from scratch.
 
-> **Status: research prototype.** It has a documented information leak and no
-> formal security proof. Read [Security](#security) before relying on it.
+> **Status: research prototype.** Its one structural exposure — two fixed
+> columns per row, always readable via a modular root extraction — is
+> neutralized at the data level (they never carry real digit content) and
+> is now formally defined and proven for that specific exposure. Binding
+> still lacks a full reduction to a named hardness assumption, and whether
+> repeated openings against the same batch could leak more than a single
+> opening does is an open question. Read [Security](#security) before
+> relying on it.
 
 ## Layout
 
 ```
 ms6/                       prover
-  core.py                    ms6() commit, ps6() open, Commitment
-  utils6.py                  arithmetic toolkit
+  core.py                    ms6() commit, ps6() open, Commitment,
+                              QueryGovernor (deployment-level query policy)
+  utils6.py                  arithmetic toolkit, incl. domain_hash (SHAKE128)
 vs6/                       verifier — imports nothing from ms6/
   core.py                    vs6() verify
   utils6.py                  the subset of the toolkit a verifier needs
-tests/                     49 checks; exits non-zero on failure
+tests/                     73 checks; exits non-zero on failure
   run_all.py                 runs every module, one combined report
   harness.py                 shared fixtures + the pass/fail reporter
   test_roundtrip.py          commit -> open -> verify, and tamper rejection
   test_updatability.py       append / replace / delete
+  test_modulus.py            modulus must stay composite; not baked in
   test_sealtree.py           the cached fold tree
   test_params.py             the parameter contract and its enforcement
   test_parity.py             prover/verifier duplicated-copy parity
-  test_modulus.py            modulus must stay composite; not baked in
   test_sizing.py             x-sizing determinism, parallel construction
   test_completeness.py       sweep over the workers>1 batch-routing path
   test_adversarial.py        tamper / forge / equivocation attempts
-  test_leak.py               root-extraction leak: prime vs unknown-order
+  test_leak.py               root-extraction leak: decoy content either way
+  test_query_governance.py   QueryGovernor: refusal, cap, per-batch scoping
   bench.py                   update cost (informational, never fails)
 examples/
   payroll_audit_demo.py      HR proves salaries to an auditor
   sanctions_screening_scale_demo.py   120k-record registry, bank checks 2
+docs/ms6_eprint.tex         the formal writeup — construction, completeness
+                              and binding arguments, the structural-exposure
+                              analysis and its neutralization, a formal
+                              edge-column hiding definition and theorem, and
+                              a running list of open problems (not tracked
+                              in git; build locally with pdflatex)
 ms6_vibe.md                development log — why each decision is what it is
 ```
 
@@ -53,14 +67,14 @@ vals = [...]                                    # the data being committed
 d, q = 3, 10                                    # degree, exponent
 
 # 1. COMMIT — publish c, keep the rest private
-c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(vals, d, q)
+c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(vals, d, q)
 
 # 2. OPEN — prove positions 0 and 17, revealing nothing else
 ps_list = ps6({0, 17}, h_list, hm_list, s_list, params)
 
 # 3. VERIFY — the verifier needs only c, the claims, and the proof
 claims = {0: vals[0], 17: vals[17]}
-vs6(c, claims, ps_list, x_list, perm_list, params, expect=agreed_params)
+vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, expect=agreed_params)
 ```
 
 `vs6` returns `True`, raises `AssertionError` if the proof is invalid, or
@@ -74,11 +88,12 @@ i = reg.append(new_value)      # add
 reg.replace(i, other_value)    # swap in place
 reg.delete(i)                  # tombstone the slot
 
-c, h_list, x_list, s_list, hm_list, perm_list, params = reg.opening()
+c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = reg.opening()
 ```
 
 An update touches one batch and refreshes a cached fold tree rather than
-recommitting — measured **~110× faster** than a full recommit at 120k records.
+recommitting — measured **~40× faster** than a full recommit at 120k records
+(`examples/sanctions_screening_scale_demo.py`).
 
 Two consequences worth knowing:
 
@@ -121,38 +136,86 @@ language keeps the copies in step, so the self-test compares their outputs
 bit-for-bit. That check has already caught drift in code no proof path
 exercises.
 
+## Query governance (optional)
+
+`S`, the per-cell blinding grid, is fixed for the life of a commitment —
+folded into `c` itself at commit time, not re-derived per opening. Two
+openings of the same batch whose claim sets differ by one item can cancel
+`S` out of the ratio between them (see [Security](#security)). `ps6()`
+itself is unchanged and has no opinion on this; `QueryGovernor` is an
+optional policy layer in front of it:
+
+```python
+from ms6 import QueryGovernor, ps6_governed
+
+gov = QueryGovernor(batch_size=1000)   # match the commitment's own batch_size
+ps_list = ps6_governed(gov, {0, 17}, h_list, hm_list, s_list, params)
+
+# a later request too close to one already served against the same batch
+# raises QueryPolicyViolation instead of being silently served
+ps6_governed(gov, {0}, h_list, hm_list, s_list, params)  # QueryPolicyViolation
+```
+
+`min_new_items` (default `2`) sets how different a new claim set must be
+from every one already served against the same batch; `max_openings_per_batch`
+(default `None`, uncapped) caps how many distinct claim sets a batch will
+ever serve before an operator should reseal that batch under a fresh salt.
+It is a policy control, not a proof — see [Security](#security) for what it
+does and does not close.
+
 ## Security
 
 Honest limitations, since this is a prototype:
 
-- **A structural leak, whose exploitability now rests on factoring.**
-  `mul_combinations_mod`'s combinatorial bucketing has singleton buckets at the
-  extremes that hold raw per-column values. Reading one back means extracting a
-  d-th root mod `mod`. That is free mod a prime, because the group order is
-  public — measured at ~33 ms against a 2048-bit prime, and widening the prime
-  bought nothing. `DEFAULT_MOD` is therefore the **RSA-2048 challenge
-  composite**: with φ(n) unknown there is no exponent to invert, so the read
-  becomes the RSA problem. The buckets are still there; what changed is that
-  they are no longer a free read.
-- **That rests on a trust assumption.** RSA-2048's factors are believed unknown
-  because RSA Security says it generated and destroyed them. That is far
-  stronger than a locally generated modulus — where whoever ran the generator
-  could have kept `p, q` and could forge — but it is not zero-trust. Only a
-  class group removes the trusted party entirely, at the cost of slower
-  arithmetic and a less familiar assumption.
-- **The `h == c` check is probabilistic**, not exact — distinct values collide
-  with probability ~1/`mod`, negligible at 2048 bits. The modulus is not baked
-  in: `ms6()` records the one it used in `params` and `ps6`/`vs6` read it from
-  there, so commitments made under any earlier modulus still verify from their
-  own `params`.
-- **No formal proof** of binding or hiding. The blinding, column permutation,
-  row-sealing and unknown-order modulus each close a specific attack found
-  during development; that is not a security argument.
-- **`hash()` is a custom digit-substitution function**, not a standard
-  cryptographic hash.
+- **A structural exposure, neutralized at the data level rather than behind a
+  hardness assumption.** `mul_combinations_mod`'s combinatorial bucketing has
+  singleton buckets at the extremes (two fixed columns per row, plus a
+  `d`-dependent cascade of neighbors) that always hold raw, invertible
+  per-column values — reading one back costs one modular root extraction,
+  regardless of `mod`. Rather than raise that cost, the construction ensures
+  the read yields nothing: those columns are reserved for digits derived
+  deterministically from the item's own hash under a domain-separating tag,
+  disjoint from where real digit content is ever written. A successful
+  extraction is therefore always possible and always decoy — verified
+  numerically (`tests/test_leak.py`), not just argued structurally.
+- **The modulus is kept as a second, independent layer anyway.**
+  `DEFAULT_MOD` is the RSA-2048 Factoring Challenge composite — unknown
+  order, so even before the neutralization above, extracting those columns
+  is the RSA problem rather than a free `O(log p)` root. `mod` is not baked
+  into the protocol: `ms6()` records the one it used in `params`, and
+  `ps6`/`vs6` read it from there, so a commitment under any other modulus
+  (prime or composite) still verifies from its own `params`.
+- **Item digests are a standard cryptographic hash.** `H1`/`H2` go through
+  SHAKE128 (`Utils.domain_hash`), not a bespoke transform — collision and
+  preimage resistance rest on SHAKE128's own published security claims. A
+  separate digit-substitution `hash()` still exists, but only for two
+  unrelated internal purposes (folding scalars in the cached fold tree,
+  sizing the secret salt's range) — it is not used for item hashing.
+- **`H1` is salted per batch**, closing an offline dictionary-attack gap:
+  without a salt, anyone can hash a candidate value and compare it against a
+  quantity extracted from a proof, with zero interaction — practical over a
+  low-entropy item space (the stated use case: SSNs, names, DOBs). The salt
+  is secret until any item in that batch is opened, same threat model as the
+  blinding grid and column permutation.
+- **A formal hiding statement exists for the neutralized columns
+  specifically.** `docs/ms6_eprint.tex` defines a guessing game and proves an
+  adversary's advantage is bounded by exactly two things: recovering that
+  batch's `H1` salt, and inverting the domain hash over the guessing space —
+  nothing else in the construction narrows this further. It says nothing
+  about the non-edge columns.
+- **Two things stay genuinely open.** Binding has no reduction to a named
+  hardness assumption — it rests on an empirical fingerprinting argument plus
+  the domain hash's assumed collision resistance, not a proof. And whether
+  many openings against the same batch (each individually unremarkable) could
+  be combined to leak more than the neutralized columns is unresolved;
+  `QueryGovernor` (above) mitigates the one concrete construction that's been
+  demonstrated, but is a policy control, not a proof of resistance to a more
+  general adversary.
 
-`ms6_vibe.md` records what each mechanism defends against and what it does not,
-including several attempts that were tried and reverted.
+`docs/ms6_eprint.tex` is the full formal treatment — construction, proofs,
+the exposure analysis, and a running list of open problems stated precisely.
+`ms6_vibe.md` records what each mechanism defends against and what it does
+not, including several attempts that were tried and reverted.
 
 ## Tests
 
@@ -161,12 +224,15 @@ python3 -m tests                 # everything, one combined report
 python3 -m tests.test_parity     # one group on its own
 ```
 
-49 checks covering the round trip, updatability (append/replace/delete), the
+73 checks covering the round trip, updatability (append/replace/delete), the
 cached fold tree, the parameter contract and its enforcement, modulus sizing
 and modulus-independence, prover/verifier copy parity, a sweep over the
-parallel batch-routing path, and an adversarial suite (tampered values,
+parallel batch-routing path, an adversarial suite (tampered values,
 wrong-index substitution, fabricated values, cross-batch swaps, iset/proof
-mismatch, and hm equivocation at both claimed and unclaimed positions). Exits non-zero on
+mismatch, and hm equivocation at both claimed and unclaimed positions), the
+root-extraction leak (confirming what's recovered is decoy under both a
+known- and unknown-order modulus, not just that extraction fails), and
+`QueryGovernor`'s refusal/cap/per-batch-scoping behavior. Exits non-zero on
 failure with the failing checks named, so it works as a CI gate.
 
 The parity module is the one worth keeping: it compares the duplicated prover

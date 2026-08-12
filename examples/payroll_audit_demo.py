@@ -11,9 +11,9 @@ board). An external auditor later needs to confirm the salaries of a
 other N-2 salaries, and without the auditor having to trust HR's word for
 it.
 
-  1. COMMIT  (HR, once):        c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(salaries, d, q)
+  1. COMMIT  (HR, once):        c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(salaries, d, q)
   2. PROVE   (HR, per audit):   ps_list = ps6(iset, h_list, hm_list, s_list, params)
-  3. VERIFY  (auditor, per audit): vs6(c, claims, ps_list, x_list, perm_list, params)
+  3. VERIFY  (auditor, per audit): vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params)
 
 `c` is the only thing that ever needs to be public ahead of time. `ps_list`
 is the audit-specific proof HR hands the auditor together with the two
@@ -38,13 +38,15 @@ This demonstrates the three properties an audit like this needs:
 
 HONESTY NOTE: this is the research-prototype protocol developed and
 hardened earlier in this project's history, not an audited zk-SNARK
-library. It has documented, accepted leaks (see mul_combinations_mod's
-"KNOWN LEAK" docstring in utils6.py: at this chunk_size/d, 4 of the 40
-columns per row are recoverable via modular root extraction -- see
-check_leak.py-style verification) and has not undergone external
-cryptographic review. Treat this as an educational/demonstration example
-of the commit-prove-verify *shape* of a ZK protocol, not a production
-credential system.
+library. At this chunk_size/d, 4 of the 40 columns per row are always
+recoverable via modular root extraction (mul_combinations_mod's
+documented structural exposure); the reference implementation
+neutralizes this at the data level (those columns never carry real
+digit content -- see docs/ms6_eprint.tex's decoy-padding section and
+README's Security section), verified numerically rather than merely
+argued, and it has not undergone external cryptographic review. Treat
+this as an educational/demonstration example of the commit-prove-verify
+*shape* of a ZK protocol, not a production credential system.
 
 PLATFORM NOTE: ms6/ps6/vs6 use ProcessPoolExecutor for parallelism when
 workers>1. All executable code below is wrapped in `if __name__ ==
@@ -97,7 +99,7 @@ def main():
     # 1. COMMIT (HR, once). c is the only thing published ahead of time.
     # ---------------------------------------------------------------------
     t0 = time.time()
-    c, h_list, x_list, s_list, hm_list, perm_list, params = ms6(salaries, D, Q, chunk_size=CHUNK_SIZE, workers=WORKERS)
+    c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(salaries, D, Q, chunk_size=CHUNK_SIZE, workers=WORKERS)
     t1 = time.time()
     print(f"[HR]      committed payroll -> published commitment c ({t1 - t0:.3f}s, "
           f"{len(h_list)} batch(es))")
@@ -131,7 +133,7 @@ def main():
     def run_check(label, claimed_vals, expect_accept):
         claims = dict(zip(audit_positions, claimed_vals))
         try:
-            vs6(c, claims, ps_list, x_list, perm_list, params, workers=WORKERS)
+            vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False
@@ -178,11 +180,11 @@ def main():
     payroll = Commitment(salaries, D, Q, chunk_size=CHUNK_SIZE, workers=WORKERS)
 
     def audit_update(label, idxs, values, expect_accept):
-        c_u, h_u, x_u, s_u, hm_u, perm_u, params_u = payroll.opening()
+        c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, params_u = payroll.opening()
         claims = dict(zip(idxs, values))
         ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, workers=WORKERS)
         try:
-            vs6(c_u, claims, ps_u, x_u, perm_u, params_u, workers=WORKERS)
+            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False
