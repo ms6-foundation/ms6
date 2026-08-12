@@ -1,21 +1,27 @@
 """The accumulator modulus: what DEFAULT_MOD must be, and that it is not baked in.
 
-DEFAULT_MOD is the RSA-2048 Factoring Challenge composite: 2048 bits,
-unknown order. The documented leak in mul_combinations_mod is independently
-closed at the data level (see ms6.core's EDGE-COLUMN DECOY PADDING), so
-what a successful extraction recovers is provably decoy, not real item
-data, regardless of the modulus -- the composite's unknown order is kept
-as a second, independent layer, not the sole thing standing between an
-attacker and real data. The property that does still matter is that the
-modulus is not baked into the protocol: ms6() records the one it used in
-the params dict, and ps6/vs6 read it from there, so a commitment under any
-other modulus -- prime or composite -- still verifies from its own params.
+DEFAULT_MOD is a 256-bit prime (nothing-up-my-sleeve, derived from pi --
+see ms6.utils6's own comment), identical across ms6/vs6's copies. The modulus's job here is fingerprinting
+(Schwartz-Zippel), not hiding: the documented leak in mul_combinations_mod
+is independently closed at the data level (see ms6.core's EDGE-COLUMN
+DECOY PADDING), so what a successful extraction recovers is provably
+decoy, not real item data, regardless of the modulus. An unknown-order
+modulus (the old RSA-2048 composite, kept as LEGACY_MOD_2048) was never
+load-bearing for that leak -- root-extraction hardness is not achievable
+via modulus choice under this construction at any size, mod a prime the
+group order is public and a d-th root is one pow() away (see
+tests/test_leak.py) -- so a 256-bit prime does the one job the modulus
+actually has, at a fraction of the arithmetic cost. The property that
+does still matter is that the modulus is not baked into the protocol:
+ms6() records the one it used in the params dict, and ps6/vs6 read it
+from there, so a commitment under any other modulus -- prime or
+composite -- still verifies from its own params.
 """
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
     _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
-    _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
+    _permute_row, _get_batch_ids, DEFAULT_MOD, LEGACY_MOD_2048, ut, gen, u, M, V,
     ms6pkg, vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
 )
@@ -25,10 +31,18 @@ def run(check):
     d, q, u_cs, u_bs = D, Q, U_CS, U_BS
     base = [mk(i) for i in range(12)]
 
-    check("modulus       : default is a 2048-bit composite of unknown order, "
-          "identical across ms6/vs6's copies",
-          DEFAULT_MOD.bit_length() == 2048 and not ut.is_prime(DEFAULT_MOD, k=64)
+    check("modulus       : default is a 256-bit prime, identical across "
+          "ms6/vs6's copies",
+          DEFAULT_MOD.bit_length() == 256 and ut.is_prime(DEFAULT_MOD, k=64)
           and DEFAULT_MOD == u.DEFAULT_MOD == V.DEFAULT_MOD)
+
+    check("modulus       : LEGACY_MOD_2048 is still the old 2048-bit "
+          "composite of unknown order, identical across ms6/vs6's copies, "
+          "and is not the default",
+          LEGACY_MOD_2048.bit_length() == 2048
+          and not ut.is_prime(LEGACY_MOD_2048, k=64)
+          and LEGACY_MOD_2048 == u.LEGACY_MOD_2048 == V.LEGACY_MOD_2048
+          and LEGACY_MOD_2048 != DEFAULT_MOD)
 
     # The modulus travels in params, so a commitment under a DIFFERENT one
     # verifies without the library knowing anything about it -- prime or

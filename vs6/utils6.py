@@ -56,19 +56,28 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # ms6/ps6/vs6 is reduced by it, so no intermediate value grows with the
 # dataset.
 #
-# The RSA-2048 Factoring Challenge composite: a 2048-bit product of two
-# primes nobody kept. Its order is unknown to everyone, including the
-# parties running ms6/ps6/vs6. See ms6.utils6's own copy of this constant
-# for the full rationale (unknown order as a second, independent layer on
-# top of the edge-column decoy padding that already closes the singleton-
-# bucket leak at the data level).
+# 256-bit prime, nothing-up-my-sleeve: pi's fractional part scaled to its
+# top 256 significant binary bits, then advanced to the first prime
+# satisfying gcd(3, p-1) == 1. See ms6.utils6's own copy of this constant
+# for the full derivation and rationale (the modulus's job here is
+# fingerprinting, not hiding -- the edge-column decoy padding is what
+# closes the singleton-bucket leak at the data level, regardless of
+# modulus; root-extraction hardness was never achievable via modulus
+# choice under this construction at any size).
 #
 # Must stay numerically identical to ms6.utils6.DEFAULT_MOD -- see this
 # file's own module docstring for why the two copies exist and how they're
 # kept in lockstep. A caller free to ignore ms6()'s params dict can still
 # pass any mod= explicitly; a commitment records the modulus it used, and
 # ps6/vs6 read it from there rather than assuming this constant.
-DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
+DEFAULT_MOD = 0x90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b31f
+
+# The former default (2048-bit RSA Factoring Challenge composite, unknown
+# order). Kept available, unchanged, for any commitment choosing to pass
+# mod=LEGACY_MOD_2048 explicitly. Must stay numerically identical to
+# ms6.utils6.LEGACY_MOD_2048 -- see that copy's own comment for why it is
+# no longer the default.
+LEGACY_MOD_2048 = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
 
 # Each decimal digit indexes its OWN prime, rather than being used as the

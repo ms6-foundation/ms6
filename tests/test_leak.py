@@ -18,46 +18,59 @@ for digits derived via _edge_digits -- deterministic, but independent of
 the item's real H1/H2 digest -- rather than real per-item content.
 combined[0]/combined[L-1] are therefore junk by construction, not merely
 expensive to read; a successful root extraction hands back a value with
-no relationship to any registry item's actual data. DEFAULT_MOD's unknown
-group order (see its own comment in utils6.py) is kept anyway as a second,
-independent layer on top of that: this module checks the decoy property
-holds regardless of which modulus is in play, and separately checks that
-the shipped default actually does make extraction the RSA problem.
+no relationship to any registry item's actual data.
 
-TWO ARMS, AND WHY BOTH ARE REQUIRED
------------------------------------
-A single "we ran the attack and it failed" result proves nothing. It is
-equally consistent with:
+DEFAULT_MOD is a 256-bit prime, not an unknown-order composite -- root-
+extraction hardness turned out not to be achievable via modulus choice
+under this construction at any size (mod a prime the group order p-1 is
+always public, so a d-th root is one pow() away; a composite makes it the
+RSA problem, but that was never the thing actually standing between an
+extraction and real data -- see DEFAULT_MOD's own comment in utils6.py).
+The old RSA-2048 composite is kept as LEGACY_MOD_2048 for anyone who still
+wants that redundant layer. This module checks the decoy property holds
+regardless of which of the three moduli below is in play, and separately
+confirms what changes and what doesn't as the modulus itself changes.
+
+THREE ARMS, AND WHY ALL THREE ARE REQUIRED
+-------------------------------------------
+A single "we ran the attack and it failed [or succeeded]" result proves
+nothing on its own. It is equally consistent with:
 
   1. the recovered value is decoy junk, by construction     <- the claim
   2. the attack code broke                                  <- a bug here
   3. parameters drifted so the attack no longer applies
 
-So this module mounts the SAME attack twice in one run:
+So this module mounts the SAME attack three times in one run:
 
-  ARM 1 -- DEFAULT_MOD itself (the RSA-2048 Factoring Challenge composite,
-      unknown order). There is no public exponent to invert, so extraction
-      MUST FAIL here -- the modulus does its job as a second layer, on top
-      of (not instead of) the decoy property checked below.
+  ARM 1 -- DEFAULT_MOD itself (the shipped 256-bit prime). Its group order
+      p-1 is public, so the d-th root is unique and computable as
+      pow(y, d^-1 mod (p-1), p): extraction MUST SUCCEED here. Demonstrates
+      the shipped default does not resist extraction -- and that this is
+      fine, because what's recovered is still checked against the pure-
+      decoy reconstruction (see _decoy_only_col0) below.
 
-  ARM 2 -- a freshly generated prime, with gcd(d, p-1) == 1 by construction
-      of D/Q below. The group order p-1 is public, so the d-th root is
-      unique and computable as pow(y, d^-1 mod (p-1), p): extraction MUST
-      SUCCEED here. This arm exists to demonstrate the decoy property does
-      not lean on extraction failing -- what's recovered is still checked
-      against the pure-decoy reconstruction (see _decoy_only_col0),
-      independent of whether the attack itself succeeds.
+  ARM 2 -- a freshly generated, unrelated prime, with gcd(d, p-1) == 1 by
+      construction. Extraction MUST SUCCEED here too. This arm exists to
+      show ARM 1 isn't special-cased -- the same holds for any known-order
+      prime, not just the one constant this module happens to import.
+
+  ARM 3 -- LEGACY_MOD_2048 (the retired RSA-2048 Factoring Challenge
+      composite, unknown order). There is no public exponent to invert, so
+      extraction MUST FAIL here. Demonstrates the old modulus, if a caller
+      opts back into it via mod=LEGACY_MOD_2048, still behaves exactly as
+      it always did -- switching the *default* changed nothing about what
+      that constant itself does.
 
 WHAT THIS DOES NOT CLAIM
 ------------------------
-The singleton bucket is not eliminated -- asserted below under both arms,
-deliberately. What's eliminated is the bucket ever holding something worth
-reading: `_decoy_only_col0` recomputes column 0's aggregate purely from
-_edge_digits, with zero reference to any item's real digest content beyond
-feeding it (as the deterministic derivation requires) into that formula,
-and asserts it matches the real pipeline's own row[0] exactly, under both
-moduli. That equality -- not extraction difficulty -- is the actual
-security property this module checks.
+The singleton bucket is not eliminated -- asserted below under all three
+arms, deliberately. What's eliminated is the bucket ever holding something
+worth reading: `_decoy_only_col0` recomputes column 0's aggregate purely
+from _edge_digits, with zero reference to any item's real digest content
+beyond feeding it (as the deterministic derivation requires) into that
+formula, and asserts it matches the real pipeline's own row[0] exactly,
+under all three moduli. That equality -- not extraction difficulty -- is
+the actual security property this module checks.
 """
 import math
 
@@ -65,13 +78,13 @@ from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
     _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
-    _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
+    _permute_row, _get_batch_ids, DEFAULT_MOD, LEGACY_MOD_2048, ut, gen, u, M, V,
     ms6pkg, vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
 )
 
 CS, BS = 12, 20
-SALT = 999983          # pinned so both arms are reproducible
+SALT = 999983          # pinned so every arm is reproducible
 
 
 def _decoy_only_col0(vals, hm, oset, r, red, mod, h1_salt=""):
@@ -143,51 +156,68 @@ def _mount(mod, vals):
 def run(check):
     vals = [mk(i) for i in range(40)]
 
-    # ARM 2's setup: a freshly generated prime with gcd(d, p-1) == 1 (the
-    # extraction precondition). D=3 makes this fail for ~half of random
-    # primes (any p == 1 mod 3), so this retries rather than asserting on a
-    # single draw -- the precondition is about the arm's setup, not
-    # something worth ever failing the suite over.
+    # DEFAULT_MOD is picked (see its own comment in utils6.py) so that
+    # gcd(d, DEFAULT_MOD - 1) == 1 already holds for this project's own
+    # default d=3 -- ARM 1 exercises the extraction precondition against
+    # the actual shipped constant, not a substitute.
+    check("leak setup    : gcd(d, DEFAULT_MOD - 1) == 1 (extraction precondition "
+          "holds for the shipped default itself)",
+          math.gcd(D, DEFAULT_MOD - 1) == 1)
+
+    # ARM 2's setup: a freshly generated, unrelated prime with
+    # gcd(d, p-1) == 1 (the extraction precondition). D=3 makes this fail
+    # for ~half of random primes (any p == 1 mod 3), so this retries rather
+    # than asserting on a single draw -- the precondition is about the
+    # arm's setup, not something worth ever failing the suite over.
     prime_mod = ut.generate_prime(256)
     while math.gcd(D, prime_mod - 1) != 1:
         prime_mod = ut.generate_prime(256)
-    check("leak setup    : gcd(d, prime_mod - 1) == 1 (extraction precondition)",
+    check("leak setup    : gcd(d, fresh prime_mod - 1) == 1 (extraction precondition)",
           math.gcd(D, prime_mod - 1) == 1)
 
-    holds_c, recovered_c, decoy_c = _mount(DEFAULT_MOD, vals)
-    holds_p, recovered_p, decoy_p = _mount(prime_mod, vals)
+    holds_1, recovered_1, decoy_1 = _mount(DEFAULT_MOD, vals)
+    holds_2, recovered_2, decoy_2 = _mount(prime_mod, vals)
+    holds_3, recovered_3, decoy_3 = _mount(LEGACY_MOD_2048, vals)
 
-    # the bucket is structural: present under BOTH moduli. Asserting this
-    # keeps the claim honest -- the SLOT was never removed, only what fills
-    # it changed.
-    check("leak          : singleton bucket holds combined[0]**d (default composite)",
-          holds_c)
+    # the bucket is structural: present under ALL THREE moduli. Asserting
+    # this keeps the claim honest -- the SLOT was never removed, only what
+    # fills it (and how hard it is to read) changed.
+    check("leak          : singleton bucket holds combined[0]**d (shipped default)",
+          holds_1)
     check("leak          : singleton bucket holds combined[0]**d (fresh prime)",
-          holds_p)
+          holds_2)
+    check("leak          : singleton bucket holds combined[0]**d (legacy composite)",
+          holds_3)
 
     # the actual fix: what's in that slot is provably decoy, independent of
-    # the modulus -- checked under both so a regression here isn't masked
-    # by which modulus happens to be default.
-    check("leak          : column 0 is provably decoy, not real item data (default composite)",
-          decoy_c)
+    # the modulus -- checked under all three so a regression here isn't
+    # masked by which modulus happens to be default.
+    check("leak          : column 0 is provably decoy, not real item data (shipped default)",
+          decoy_1)
     check("leak          : column 0 is provably decoy, not real item data (fresh prime)",
-          decoy_p)
+          decoy_2)
+    check("leak          : column 0 is provably decoy, not real item data (legacy composite)",
+          decoy_3)
 
-    # ARM 1 -- extraction against the shipped default fails: DEFAULT_MOD's
-    # order is unknown (RSA-2048 composite), so there is no exponent to
-    # invert. This is the modulus doing its job as a second layer, on top
-    # of (not instead of) the decoy property confirmed by decoy_c above.
-    # phrased without the word FAIL: a CI step grepping output for that
-    # string would otherwise false-positive on a passing run.
-    check("leak ARM 1    : root extraction does NOT recover the column under "
-          "the default composite modulus", not recovered_c)
+    # ARM 1 -- extraction against the shipped default succeeds: its group
+    # order is public (it's prime), so there's an exponent to invert. Not a
+    # red flag -- see the module docstring for why: what's recovered is
+    # decoy either way, independently confirmed by decoy_1 above.
+    check("leak ARM 1    : root extraction recovers the (junk) column under "
+          "the shipped default prime modulus", recovered_1)
 
-    # ARM 2 -- extraction succeeds against a modulus with known group
-    # order, as expected. Not a red flag: see the module docstring for why
-    # this is fine -- what's recovered is decoy either way, independently
-    # confirmed by decoy_p above.
+    # ARM 2 -- extraction succeeds against an unrelated modulus with known
+    # group order too, as expected -- ARM 1 isn't a special case.
     check("leak ARM 2    : root extraction recovers the (junk) column under "
-          "a fresh known-order prime modulus", recovered_p)
+          "a fresh, unrelated known-order prime modulus", recovered_2)
+
+    # ARM 3 -- extraction against the legacy composite fails: its order is
+    # unknown, so there is no exponent to invert. Phrased without the word
+    # FAIL: a CI step grepping output for that string would otherwise
+    # false-positive on a passing run. Demonstrates LEGACY_MOD_2048 still
+    # behaves exactly as it always did for anyone who opts back into it.
+    check("leak ARM 3    : root extraction does NOT recover the column under "
+          "the legacy composite modulus", not recovered_3)
 
 
 if __name__ == "__main__":

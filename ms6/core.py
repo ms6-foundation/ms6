@@ -40,6 +40,11 @@ DEFAULT_SEAL_MOD_BITS = 256
 # the exact same value or verification of honest proofs fails.
 DEFAULT_MOD = u.DEFAULT_MOD
 
+# The former default -- see u.LEGACY_MOD_2048's own comment for why it is
+# no longer DEFAULT_MOD. Exported for any caller who wants the old
+# unknown-order composite explicitly.
+LEGACY_MOD_2048 = u.LEGACY_MOD_2048
+
 # Modulus for building S (the secret-salt blinding grid) in _ms6_batch.
 # Reuses DEFAULT_MOD rather than a separate ring: S's *value* travels to
 # ps6 in s_list and is used there as a base in the mod-DEFAULT_MOD ring
@@ -205,7 +210,7 @@ def make_params(d, q, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SI
 
 
 def _brief(v):
-    """Abbreviate a value for an error message -- `mod` is a 2048-bit int and
+    """Abbreviate a value for an error message -- `mod` is a large int and
     printing it twice makes a mismatch report unreadable."""
     if isinstance(v, int) and v.bit_length() > 64:
         return f"<{v.bit_length()}-bit int ...{str(v)[-6:]}>"

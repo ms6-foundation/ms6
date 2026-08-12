@@ -23,6 +23,7 @@ _seal_batch, _SealTree = M._seal_batch, M._SealTree
 chunk_of, chunks, _column_perm = M.chunk_of, M.chunks, M._column_perm
 _permute_row, _get_batch_ids = M._permute_row, M._get_batch_ids
 DEFAULT_MOD, ut, gen = M.DEFAULT_MOD, M.ut, M.gen
+LEGACY_MOD_2048 = M.LEGACY_MOD_2048
 
 # Parameters the check bodies share. Small on purpose: these assert
 # equivalences, not throughput, and every one of them runs a real

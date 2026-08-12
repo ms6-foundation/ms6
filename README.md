@@ -26,12 +26,12 @@ ms6/                       prover
 vs6/                       verifier — imports nothing from ms6/
   core.py                    vs6() verify
   utils6.py                  the subset of the toolkit a verifier needs
-tests/                     73 checks; exits non-zero on failure
+tests/                     78 checks; exits non-zero on failure
   run_all.py                 runs every module, one combined report
   harness.py                 shared fixtures + the pass/fail reporter
   test_roundtrip.py          commit -> open -> verify, and tamper rejection
   test_updatability.py       append / replace / delete
-  test_modulus.py            modulus must stay composite; not baked in
+  test_modulus.py            default modulus's shape; not baked in
   test_sealtree.py           the cached fold tree
   test_params.py             the parameter contract and its enforcement
   test_parity.py             prover/verifier duplicated-copy parity
@@ -178,13 +178,22 @@ Honest limitations, since this is a prototype:
   disjoint from where real digit content is ever written. A successful
   extraction is therefore always possible and always decoy — verified
   numerically (`tests/test_leak.py`), not just argued structurally.
-- **The modulus is kept as a second, independent layer anyway.**
-  `DEFAULT_MOD` is the RSA-2048 Factoring Challenge composite — unknown
-  order, so even before the neutralization above, extracting those columns
-  is the RSA problem rather than a free `O(log p)` root. `mod` is not baked
-  into the protocol: `ms6()` records the one it used in `params`, and
-  `ps6`/`vs6` read it from there, so a commitment under any other modulus
-  (prime or composite) still verifies from its own `params`.
+- **The modulus's job is fingerprinting, not hiding — sized accordingly.**
+  `DEFAULT_MOD` is a 256-bit nothing-up-my-sleeve prime (derived
+  transparently from pi's digits — see its comment in `utils6.py`), not the
+  RSA-2048 composite this project used to ship. Root-extraction hardness
+  turned out not to be achievable through modulus choice under this
+  construction at any size — mod a prime the group order is always public,
+  so a `d`-th root is one `pow()` away regardless of bit length — so the
+  decoy neutralization above is what actually has to hold, and does,
+  independent of the modulus (`tests/test_leak.py`). The old composite is
+  still available as `LEGACY_MOD_2048` for anyone who wants that redundant
+  unknown-order layer anyway, at a measured ~2-3× arithmetic cost for the
+  exponentiation-dominated operations throughout `ps6`/`vs6`. `mod` is not
+  baked into the protocol either way: `ms6()`
+  records the one it used in `params`, and `ps6`/`vs6` read it from there,
+  so a commitment under any other modulus (prime or composite) still
+  verifies from its own `params`.
 - **Item digests are a standard cryptographic hash.** `H1`/`H2` go through
   SHAKE128 (`Utils.domain_hash`), not a bespoke transform — collision and
   preimage resistance rest on SHAKE128's own published security claims. A
@@ -224,16 +233,17 @@ python3 -m tests                 # everything, one combined report
 python3 -m tests.test_parity     # one group on its own
 ```
 
-73 checks covering the round trip, updatability (append/replace/delete), the
+78 checks covering the round trip, updatability (append/replace/delete), the
 cached fold tree, the parameter contract and its enforcement, modulus sizing
 and modulus-independence, prover/verifier copy parity, a sweep over the
 parallel batch-routing path, an adversarial suite (tampered values,
 wrong-index substitution, fabricated values, cross-batch swaps, iset/proof
 mismatch, and hm equivocation at both claimed and unclaimed positions), the
-root-extraction leak (confirming what's recovered is decoy under both a
-known- and unknown-order modulus, not just that extraction fails), and
-`QueryGovernor`'s refusal/cap/per-batch-scoping behavior. Exits non-zero on
-failure with the failing checks named, so it works as a CI gate.
+root-extraction leak (confirming what's recovered is decoy under the shipped
+default prime, a fresh unrelated prime, and the legacy composite alike, not
+just that extraction fails), and `QueryGovernor`'s refusal/cap/per-batch-
+scoping behavior. Exits non-zero on failure with the failing checks named,
+so it works as a CI gate.
 
 The parity module is the one worth keeping: it compares the duplicated prover
 and verifier copies output-for-output, and is the only check that catches

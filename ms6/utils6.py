@@ -28,29 +28,50 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # ms6/ps6/vs6 is reduced by it, so no intermediate value grows with the
 # dataset.
 #
-# The RSA-2048 Factoring Challenge composite: a 2048-bit product of two
-# primes nobody kept (RSA Laboratories published the number, not its
-# factors, and retired the challenge before any factor was found). Its
-# order is unknown to everyone, including the parties running ms6/ps6/vs6,
-# with no generation process to trust -- the number's provenance is public
-# record rather than a nothing-up-my-sleeve construction this codebase
-# invents itself.
+# 256-bit prime, nothing-up-my-sleeve: pi's fractional part computed to
+# 100 decimal digits (Chudnovsky series), scaled to its top 256
+# significant binary bits, then advanced through odd candidates to the
+# first one that is both prime and satisfies gcd(3, p-1) == 1 (126
+# candidates in) -- kept there, not resampled, so d=3's own root-
+# extraction demo in tests/test_leak.py applies directly to this exact
+# shipped constant rather than a substitute. Independently reproducible
+# by anyone from that recipe; this codebase does not control its value.
 #
-# The singleton-bucket leak documented in mul_combinations_mod's docstring
-# is independently closed at the data level (see ms6.core's EDGE-COLUMN
-# DECOY PADDING): the columns a root extraction can reach never carry real
-# per-item digest data, regardless of the modulus. Unknown group order is
-# therefore not load-bearing for that specific leak -- it is kept as a
-# second, independent layer (an extraction landing on a real column would
-# still need to take a root mod an unknown-order group) at the cost of
-# modular exponentiation scaling with a 2048-bit rather than 256-bit
-# modulus throughout ps6/vs6. See docs/bench_efficiency.py for the
-# measured cost of that trade.
+# Why prime is fine: the modulus's job here is fingerprinting (Schwartz-
+# Zippel), not hiding. The singleton-bucket leak documented in
+# mul_combinations_mod's docstring is closed at the data level (see
+# ms6.core's EDGE-COLUMN DECOY PADDING) -- the columns a root extraction
+# can reach never carry real per-item digest data, regardless of the
+# modulus, so what a successful extraction recovers is always decoy. An
+# unknown-order modulus was never load-bearing for that leak; it only ever
+# added a second, redundant layer, at the cost of modular exponentiation
+# scaling with a 2048-bit rather than 256-bit modulus throughout ps6/vs6 --
+# measured at roughly 2-3x slower for the exponentiation-dominated
+# operations (docs/ms6_eprint.tex's efficiency section). Root-extraction
+# hardness itself is not achievable via modulus choice under this
+# construction at any size: mod a prime the group order p-1 is public, so
+# a d-th root is a single pow() away regardless of bit length (ms6_vibe.md
+# entry 10 measured 39ms against a 2048-bit prime); mod a composite that
+# hardness is real (the RSA problem) but at the cost above for a property
+# nothing here relies on. See tests/test_leak.py for the corresponding
+# checks.
+#
+# The old RSA-2048 Factoring Challenge composite is kept as LEGACY_MOD_2048
+# below for any deployment that still wants that redundant second layer.
 #
 # A caller free to ignore ms6()'s params dict can still pass any mod=
 # explicitly; a commitment records the modulus it used, and ps6/vs6 read it
 # from there rather than assuming this constant.
-DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
+DEFAULT_MOD = 0x90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b31f
+
+# The former default (2048-bit RSA Factoring Challenge composite, unknown
+# order to everyone including the parties running ms6/ps6/vs6). Kept
+# available, unchanged, for any commitment or deployment choosing to pass
+# mod=LEGACY_MOD_2048 explicitly for the extra (redundant, per the
+# reasoning above) unknown-order layer. Not the default because it buys no
+# real security here at a measured ~2-3x arithmetic cost -- see
+# DEFAULT_MOD's own comment above.
+LEGACY_MOD_2048 = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
 # hash() (below) evaluates sum_e powset[digit_e][k-1] * 10**e over the
 # decimal digits of val. A digit can only take 10 values, so the

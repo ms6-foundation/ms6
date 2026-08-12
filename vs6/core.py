@@ -54,6 +54,10 @@ DEFAULT_SEAL_BATCH_SIZE = 1000
 # comment for provenance) rather than duplicated a fourth time here.
 DEFAULT_MOD = u.DEFAULT_MOD
 
+# The former default -- see u.LEGACY_MOD_2048's own comment. Exported for
+# any caller who wants the old unknown-order composite explicitly.
+LEGACY_MOD_2048 = u.LEGACY_MOD_2048
+
 ut = u.Utils()
 
 # EDGE-COLUMN DECOY PADDING -- vs6's own copy of ms6.core's constants/
@@ -104,7 +108,7 @@ PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size", "r
 
 
 def _brief(v):
-    """Abbreviate a value for an error message -- `mod` is a 2048-bit int and
+    """Abbreviate a value for an error message -- `mod` is a large int and
     printing it twice makes a mismatch report unreadable."""
     if isinstance(v, int) and v.bit_length() > 64:
         return f"<{v.bit_length()}-bit int ...{str(v)[-6:]}>"

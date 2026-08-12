@@ -20,12 +20,12 @@ from .core import (
     vs6, interlace_mod,
     unpack_params, PARAM_KEYS, ParamMismatch,
     DEFAULT_CHUNK_SIZE, DEFAULT_BATCH_SIZE, DEFAULT_WORKERS,
-    DEFAULT_SEAL_BATCH_SIZE, DEFAULT_MOD,
+    DEFAULT_SEAL_BATCH_SIZE, DEFAULT_MOD, LEGACY_MOD_2048,
 )
 from . import utils6
 
 __all__ = [
     "vs6", "interlace_mod", "unpack_params", "PARAM_KEYS", "ParamMismatch",
     "DEFAULT_CHUNK_SIZE", "DEFAULT_BATCH_SIZE", "DEFAULT_WORKERS",
-    "DEFAULT_SEAL_BATCH_SIZE", "DEFAULT_MOD", "utils6",
+    "DEFAULT_SEAL_BATCH_SIZE", "DEFAULT_MOD", "LEGACY_MOD_2048", "utils6",
 ]

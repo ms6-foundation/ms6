@@ -2221,3 +2221,152 @@ stale comments found across `ms6/*.py`, `vs6/*.py`, `tests/*.py`,
 - Not yet committed to the paper — implementation, tests, and the
   comment-cleanup pass only, on a new `multi-query-governance` branch off
   `salted-domain-hash`.
+
+## 54. `vsum_parts`: investigated, reverted, and DEFAULT_MOD moved to a 256-bit prime
+
+**Request** — "wire vsum_parts correctly to the eval_level_mod, and to the
+mul_combinations_mod." `vsum_parts`/`vsum` (in `ms6/utils6.py`, and a
+freshly-duplicated copy in `vs6/utils6.py`) were found already sitting in
+the working tree, uncommitted, with zero git history — someone had edited
+these files directly outside a normal commit. `eval_level_mod` had its
+`return list(r.values())` replaced with `return self.vsum_parts(r.values())`,
+and `mul_combinations_mod`'s bucket-pairing comprehension had `r.items()`
+swapped for `zip(r.keys(), self.vsum_parts(r.values()))`, in both copies.
+
+**Diagnosis.** `python3 -m tests.test_leak` failed 3 checks; `python3 -m
+tests` failed immediately at `test_roundtrip.py`'s `assert h == c` —
+completeness itself was broken, not just a leak-test assumption.
+`vsum_parts` decimal-concatenates a bucket's raw value with its neighbor's
+(`eval_level_mod([2,3,5,7,11,13], ...)`'s bucket 0 traced by hand: merged
+value = `v0*10 + v1` exactly) *before* the prover/verifier values get
+multiplied together in `mul_combinations_mod`. Since
+`(p0·10+p1)·(v0·10+v1) = 100·p0v0 + 10·p0v1 + 10·p1v0 + p1v1`, not
+`p0v0+p1v1`, this introduces cross-terms the Hadamard-factorization
+identity the protocol relies on doesn't have room for — an algebraic
+incompatibility, not a wiring slip.
+
+Asked what `vsum_parts` was actually meant to accomplish (three options:
+compress proof size / revert / something else). Answer: "make root
+extraction hard so we use 256 bit prime DEFAULT_MOD" — the real goal was
+obscuring the exposed singleton/near-singleton buckets (`Proposition
+prop:leak`/`Corollary cor:cascade` in the eprint) enough that a cheap
+known-order prime could replace the expensive 2048-bit RSA composite as
+`DEFAULT_MOD`, without reopening the leak the composite's unknown order
+currently guards against as a second layer.
+
+**Why that specific goal can't be reached by transforming what's
+published.** The legitimate verifier never extracts anything from a
+singleton bucket — `mul_combinations_mod` only ever multiplies the
+prover's published `ps[idx]` by the verifier's own independently-computed
+counterpart. Root extraction is a *passive* attack an eavesdropper mounts
+against `ps[idx]` alone. Any transformation of `ps[idx]` the verifier can
+correctly consume using only public materials (params, `x_list`,
+`perm_list`, the proof itself) is, by the same token, undoable by that
+eavesdropper — they have identical inputs. Obscuring a bucket so it
+survives verification but defeats extraction needs the underlying
+primitive to change (discrete-log-style hiding), not a repacking of the
+existing "value as the base of a public power mod a prime" construction.
+`mul_combinations_mod`'s own docstring already said as much (citing a
+`forge_ps.py` blinding attempt from earlier project history). Independent
+confirmation, found in this file: entry ~10's own measurement — "root-
+extraction hardness | not achievable with a prime at any size... Root
+extraction is free mod a prime because the group order is known; hardness
+needs a modulus of unknown order... Going 2048 -> 4096 buys nothing
+there," with a 39ms empirical break of a cubic residue mod the (then-)
+2048-bit default. This project had already run this exact experiment and
+recorded the negative result.
+
+Given a provably-unreachable goal, `vsum_parts` and both wiring changes
+were reverted to the tested `main` behavior (git diff empty after; `python3
+-m tests`, three consecutive clean runs).
+
+**What the goal actually needed** turned out to already exist:
+`DEFAULT_MOD`'s own comment already said the RSA-2048 composite's unknown
+order was never load-bearing for the singleton-bucket leak (the edge-
+column decoy padding neutralizes it regardless of modulus) — the composite
+was kept only as an optional, redundant second layer, at a measured
+~2-3x modular-exponentiation cost over a 256-bit modulus (the eprint's own
+efficiency-section benchmark). So "use a cheap prime safely" was already
+true today, without touching `vsum_parts` at all. Confirmed with the user,
+then implemented directly:
+
+- `DEFAULT_MOD` in both `ms6/utils6.py` and `vs6/utils6.py` changed from
+  the RSA-2048 Factoring Challenge composite to a 256-bit nothing-up-my-
+  sleeve prime: pi's fractional part computed to 100 decimal digits,
+  scaled to its top 256 significant binary bits, then advanced through
+  odd candidates to the first one that is both prime and satisfies
+  `gcd(3, p-1) == 1` (126 candidates in) — kept there, not resampled, so
+  `d=3`'s own extraction demo in `test_leak.py` applies to the exact
+  shipped constant, not a substitute.
+- The old value kept, unchanged, as `LEGACY_MOD_2048` in both `utils6.py`
+  copies, exported through `ms6/core.py`/`vs6/core.py` and both
+  `__init__.py`s, for any caller who wants that redundant layer via
+  `mod=LEGACY_MOD_2048`.
+- `tests/test_modulus.py`: assertion flipped (256-bit prime, not 2048-bit
+  composite) plus a new check that `LEGACY_MOD_2048` is still the old
+  2048-bit composite, identical across both copies, and not the default.
+- `tests/test_leak.py`: redesigned from two arms to three. ARM 1 (shipped
+  default) now demonstrates extraction *succeeding* against a known-order
+  prime, same as ARM 2 (a freshly generated, unrelated prime — shows ARM 1
+  isn't a special case); new ARM 3 exercises `LEGACY_MOD_2048` and
+  demonstrates extraction still fails there, unchanged, for anyone who
+  opts back in. All three arms confirm the decoy property holds regardless
+  (`_decoy_only_col0`).
+- `README.md`'s Security section and tests/ layout comment rewritten to
+  describe the 256-bit default, `LEGACY_MOD_2048`'s availability, and the
+  root-extraction-hardness-not-achievable finding directly; check count
+  updated 73 -> 78 (two new checks in `test_modulus.py`, three new in
+  `test_leak.py`).
+- Stale "`mod` is a 2048-bit int" comments in `ms6/core.py`'s and
+  `vs6/core.py`'s `_brief()` genericized to "a large int" rather than
+  hardcoding a bit count that's no longer accurate either way.
+
+**Comment cleanup, this entry's own pass:** an Explore agent audited every
+comment touched or newly written by this entry's `DEFAULT_MOD` change,
+across `ms6/utils6.py`, `vs6/utils6.py`, `ms6/core.py`, `vs6/core.py`,
+`tests/test_modulus.py`, `tests/test_leak.py`, `README.md`, plus a pass
+over the wider repo for any other "2048"/"RSA"/"composite" reference left
+implying `DEFAULT_MOD` is still the old composite. Found two real
+inaccuracies, both fixed:
+
+- The pi-derivation comment ("the next prime at or above the first 256
+  bits of pi's fractional part... advanced past a handful of composites")
+  did not describe a reproducible recipe — "first 256 bits" is ambiguous
+  (pi's fractional part has 2 leading zero bits in binary, so a naive
+  `floor(frac * 2**256)` lands on a 254-bit number, not 256), and "a
+  handful" undersold the actual 126 candidates advanced through. Traced
+  the actual derivation by hand (scale to a generous precision buffer,
+  right-shift to the top 256 significant bits, then search) and confirmed
+  it exactly reproduces the shipped constant; rewrote the comment in both
+  `utils6.py` copies to describe that precisely, with the real candidate
+  count.
+- A claimed "8x arithmetic cost" for `LEGACY_MOD_2048` vs. the new default
+  (in `utils6.py`'s comments and `README.md`) was an unmeasured guess that
+  contradicted this project's own actual benchmark
+  (`docs/ms6_eprint.tex`'s efficiency section measures ~2-3x for the
+  exponentiation-dominated operations). Corrected all three locations to
+  cite the real, measured figure instead.
+- `docs/bench_efficiency.py` (gitignored, so untracked, but still live
+  code) hardcoded `mod_2048 = core.DEFAULT_MOD` to build its "2048-bit"
+  comparison arm — now silently comparing a 256-bit prime against itself
+  since `DEFAULT_MOD` changed. Fixed to read `core.LEGACY_MOD_2048`
+  explicitly, with the module docstring and arm label updated to match.
+
+No other stale comments found across `ms6/*.py`, `vs6/*.py`, `tests/*.py`,
+`examples/*.py`, or `README.md` from this change.
+
+### Verified — 2026-08-12
+
+`python3 -m tests`, three consecutive runs after the `vsum_parts` revert:
+all green. `python3 -m tests`, three consecutive runs after the
+`DEFAULT_MOD` switch: all green, 78 checks, 0 failures, including the new
+`LEGACY_MOD_2048` and three-arm leak checks. `python3 -m tests`, three
+more consecutive runs after the comment-cleanup pass above (comment-only
+changes, but re-verified rather than assumed): all green, 78/78.
+
+Committed to `main` (comment cleanup folded into the same commit as the
+`DEFAULT_MOD` switch — no code-behavior changes in this entry, only the
+constant, its test coverage, and documentation). Not reflected in
+`docs/ms6_eprint.tex` (`Remark rem:mod-choice` and the efficiency
+section's 2048-vs-256 discussion still describe the old default) —
+pending explicit go-ahead, same as this session's established pattern.
