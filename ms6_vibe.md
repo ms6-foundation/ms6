@@ -1711,6 +1711,71 @@ convention.
 - Full suite re-run after the paper changes (code untouched in this step):
   still green.
 
+## 48. `DEFAULT_MOD` back to the RSA-2048 composite; efficiency comparison
+
+**Request** — "Please revert the DEFAULT_MOD 2048 unknown order modulus
+and compare the efficiency with 256 bit prime," confirmed as a permanent
+revert (not just a one-off measurement) when asked to disambiguate.
+
+Reverted entry 46's constant back to the RSA-2048 Factoring Challenge
+composite in both `ms6/utils6.py` and `vs6/utils6.py`, and rewrote the
+comments touched by entry 46 to match: `DEFAULT_MOD`'s own comment now
+frames unknown group order as a second, independent layer on top of the
+edge-column decoy padding (entry 45) rather than something decoy padding
+made unnecessary — the two are not in tension, decoy padding just means
+the modulus is no longer the *only* thing standing in an extractor's way.
+`mul_combinations_mod`'s KNOWN LEAK docstring updated the same way.
+
+- `tests/test_leak.py`'s two-arm structure swapped roles: ARM 1 is now
+  `DEFAULT_MOD` itself (composite, extraction must FAIL), ARM 2 is a
+  freshly generated prime (known order, extraction must SUCCEED) — the
+  inverse of entry 46's assignment. Caught a real bug while doing this:
+  the ARM 2 setup asserted `gcd(d, p-1) == 1` on a single fresh draw
+  rather than retrying, and D=3 makes that fail for ~half of random
+  primes (any p == 1 mod 3) — not the "exceedingly unlikely" case the
+  comment (copied from entry 46, where the prime was fixed rather than
+  freshly drawn each run) claimed. Fixed with a retry loop; reran the
+  suite three times back to back to confirm the flake is gone.
+- `tests/test_modulus.py`'s assertion reverted from "256-bit prime" to
+  "2048-bit composite of unknown order, and not prime" (`ut.is_prime`
+  checked directly against the live constant, not assumed).
+- No changes needed to `ms6/core.py`, `vs6/core.py`, `tests/harness.py`,
+  or `tests/test_updatability.py` — none of them named the modulus's
+  size/type, only imported the constant.
+
+### Efficiency comparison — 2026-08-12
+
+Extended `docs/bench_efficiency.py` into an A/B script: same 120,000-record
+registry, `workers=4`, run once under `DEFAULT_MOD` (2048-bit) and once
+under a freshly generated 256-bit prime passed via `mod=`, decoy padding
+identical in both arms (it doesn't depend on modulus choice or size).
+
+| op      | 2048-bit | 256-bit | ratio |
+|---------|---------:|--------:|------:|
+| commit  |  1866ms  | 1532ms  | 1.2x  |
+| prove   |   283ms  |   84ms  | 3.4x  |
+| verify  |   163ms  |   76ms  | 2.1x  |
+| build   |   145ms  |  116ms  | 1.2x  |
+| append  |    18ms  |   17ms  | 1.1x  |
+| replace |    39ms  |   23ms  | 1.6x  |
+
+Prove/verify (dominated by `pow(..., D, mod)` at every leaf, scaling with
+the modulus's bit length) show the largest gap (2-3x); commit/build/
+append (dominated by the digit-counting and folding passes, which don't
+scale with modulus size) show a much smaller one (~1.2x). This is the
+`docs/ms6_eprint.tex` Efficiency table's shape, just at 2048 vs 256 bits
+instead of the entry-43/47 comparison — the paper's own text was not
+re-touched this entry, since the request was scoped to the code revert
+and a measurement, not another rewrite; its `Remark~\ref{rem:mod-choice}`
+currently still argues for a 256-bit prime as the shipped default, which
+now describes a design this session moved away from again. Left as-is
+pending an explicit request to reconcile it.
+
+### Verified — 2026-08-12
+
+- `python3 -m tests`, three consecutive runs: all green, no flakes
+  (the ARM 2 retry-loop fix specifically checked against re-occurring).
+
 ---
 
 # Open items
@@ -1757,3 +1822,15 @@ convention.
   load-bearing for this property, so there's no reason to keep paying for
   it. It remains true that binding (the bullet below) does not depend on
   this choice either way.
+
+- **Update (entry 48): `DEFAULT_MOD` is back to the RSA-2048 composite.**
+  The bullet directly above (entry 46's reasoning) is still correct as an
+  argument that decoy padding alone is *sufficient* — it's just no longer
+  what's shipped. Entry 48 reverted the constant to keep unknown group
+  order as a second, independent layer rather than relying on the decoy
+  mitigation being the only thing standing between an extractor and real
+  data, at the measured cost of prove/verify running ~2-3x slower than
+  under a 256-bit prime (see entry 48's efficiency table). Whether to
+  stay on the composite, the prime, or make it a deployment-time choice
+  is a cost/trust tradeoff, not a correctness question — nothing above
+  about the decoy property or binding depends on which one is default.

@@ -55,28 +55,19 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # ms6/ps6/vs6 is reduced by it, so no intermediate value grows with the
 # dataset.
 #
-# A fixed 256-bit prime. The singleton-bucket leak documented in
-# mul_combinations_mod's docstring is closed at the data level (see
-# ms6.core's EDGE-COLUMN DECOY PADDING): the columns a root extraction can
-# reach never carry real per-item digest data, regardless of the modulus,
-# so there is nothing to gain by making extraction expensive. That frees
-# the modulus to be chosen for cost alone -- modular exponentiation
-# dominates ps6/vs6, and a 256-bit prime is materially cheaper than a
-# wider modulus at every operation that scales with its bit length.
-#
-# Prime rather than composite is not load-bearing either way -- no modular
-# inverse is ever taken mod this value (audited), so a composite would
-# drop in unchanged -- prime is simply the easier thing to generate and
-# verify: primality is checked directly (Miller-Rabin), where a trustworthy
-# composite of unknown order needs either a nothing-up-my-sleeve source or
-# a generation process nobody kept the factors from.
+# The RSA-2048 Factoring Challenge composite: a 2048-bit product of two
+# primes nobody kept. Its order is unknown to everyone, including the
+# parties running ms6/ps6/vs6. See ms6.utils6's own copy of this constant
+# for the full rationale (unknown order as a second, independent layer on
+# top of the edge-column decoy padding that already closes the singleton-
+# bucket leak at the data level).
 #
 # Must stay numerically identical to ms6.utils6.DEFAULT_MOD -- see this
 # file's own module docstring for why the two copies exist and how they're
 # kept in lockstep. A caller free to ignore ms6()'s params dict can still
 # pass any mod= explicitly; a commitment records the modulus it used, and
 # ps6/vs6 read it from there rather than assuming this constant.
-DEFAULT_MOD = 0xa4436df368a6037b5634e0c192096ad8a7289bf1af153aef98ed9c4cbac951e1
+DEFAULT_MOD = 0xc7970ceedcc3b0754490201a7aa613cd73911081c790f5f1a8726f463550bb5b7ff0db8e1ea1189ec72f93d1650011bd721aeeacc2acde32a04107f0648c2813a31f5b0b7765ff8b44b4b6ffc93384b646eb09c7cf5e8592d40ea33c80039f35b4f14a04b51f7bfd781be4d1673164ba8eb991c2c4d730bbbe35f592bdef524af7e8daefd26c66fc02c479af89d64d373f442709439de66ceb955f3ea37d5159f6135809f85334b5cb1813addc80cd05609f10ac6a95ad65872c909525bdad32bc729592642920f24c61dc5b3c3b7923e56b16a4d9d373d8721f24a3fc0f1b3131f55615172866bccc30f95054c824e733a5eb6817f7bc16399d48c6361cc7e5
 
 
 # Each decimal digit indexes its OWN prime, rather than being used as the

@@ -10,18 +10,19 @@ term: combined[0]**d and combined[L-1]**d, where
 
 Structurally, this is unchanged and unfixed: the singleton bucket still
 holds a single raw value, and anyone who can take a d-th root mod `mod`
-still reads it straight out -- trivially, since DEFAULT_MOD is now a prime
-(the group order is public). What changed is WHAT lives at columns 0 and
-chunk_size-1: _ms6_batch (see ms6.core's EDGE-COLUMN DECOY PADDING comment)
-now reserves rand_edge_size columns at each row's edges for digits derived
-via _edge_digits -- deterministic, but independent of the item's real H1/H2
-digest -- rather than real per-item content. combined[0]/combined[L-1] are
-therefore junk by construction, not merely expensive to read; a successful
-root extraction hands back a value with no relationship to any registry
-item's actual data. Making extraction cheap (a prime modulus) is therefore
-free -- there is nothing left in that slot worth protecting with a hard
-modulus, and ps6/vs6's dominant cost (modular exponentiation) is much
-cheaper for it. See DEFAULT_MOD's own comment in utils6.py.
+still reads it straight out -- easily if `mod`'s group order is public,
+harder (the RSA problem) if it isn't. What changed is WHAT lives at
+columns 0 and chunk_size-1: _ms6_batch (see ms6.core's EDGE-COLUMN DECOY
+PADDING comment) now reserves rand_edge_size columns at each row's edges
+for digits derived via _edge_digits -- deterministic, but independent of
+the item's real H1/H2 digest -- rather than real per-item content.
+combined[0]/combined[L-1] are therefore junk by construction, not merely
+expensive to read; a successful root extraction hands back a value with
+no relationship to any registry item's actual data. DEFAULT_MOD's unknown
+group order (see its own comment in utils6.py) is kept anyway as a second,
+independent layer on top of that: this module checks the decoy property
+holds regardless of which modulus is in play, and separately checks that
+the shipped default actually does make extraction the RSA problem.
 
 TWO ARMS, AND WHY BOTH ARE REQUIRED
 -----------------------------------
@@ -34,18 +35,17 @@ equally consistent with:
 
 So this module mounts the SAME attack twice in one run:
 
-  ARM 1 -- DEFAULT_MOD itself (a 256-bit prime with gcd(d, p-1) == 1 by
-      construction of D/Q below). The group order p-1 is public, so the
-      d-th root is unique and computable as pow(y, d^-1 mod (p-1), p).
-      Extraction MUST SUCCEED here -- that's expected and no longer a
-      concern, since what's recovered is checked against the pure-decoy
-      reconstruction below.
+  ARM 1 -- DEFAULT_MOD itself (the RSA-2048 Factoring Challenge composite,
+      unknown order). There is no public exponent to invert, so extraction
+      MUST FAIL here -- the modulus does its job as a second layer, on top
+      of (not instead of) the decoy property checked below.
 
-  ARM 2 -- an unrelated composite of unknown order, generated fresh each
-      run. phi(n) is unknown, so there is no exponent to invert and
-      extracting the root is the RSA problem: extraction MUST FAIL here.
-      This arm exists to demonstrate the decoy property does not lean on
-      extraction failing -- it's checked directly (see _decoy_only_col0)
+  ARM 2 -- a freshly generated prime, with gcd(d, p-1) == 1 by construction
+      of D/Q below. The group order p-1 is public, so the d-th root is
+      unique and computable as pow(y, d^-1 mod (p-1), p): extraction MUST
+      SUCCEED here. This arm exists to demonstrate the decoy property does
+      not lean on extraction failing -- what's recovered is still checked
+      against the pure-decoy reconstruction (see _decoy_only_col0),
       independent of whether the attack itself succeeds.
 
 WHAT THIS DOES NOT CLAIM
@@ -137,48 +137,51 @@ def _mount(mod, vals):
 def run(check):
     vals = [mk(i) for i in range(40)]
 
-    # ARM 1: DEFAULT_MOD itself. If a caller ever changes it to something
-    # where gcd(D, mod-1) != 1, generate_prime's own randomness makes that
-    # exceedingly unlikely to persist across runs; this asserts the
-    # precondition rather than silently skipping the arm.
-    check("leak setup    : gcd(d, DEFAULT_MOD - 1) == 1 (extraction precondition)",
-          math.gcd(D, DEFAULT_MOD - 1) == 1)
+    # ARM 2's setup: a freshly generated prime with gcd(d, p-1) == 1 (the
+    # extraction precondition). D=3 makes this fail for ~half of random
+    # primes (any p == 1 mod 3), so this retries rather than asserting on a
+    # single draw -- the precondition is about the arm's setup, not
+    # something worth ever failing the suite over.
+    prime_mod = ut.generate_prime(256)
+    while math.gcd(D, prime_mod - 1) != 1:
+        prime_mod = ut.generate_prime(256)
+    check("leak setup    : gcd(d, prime_mod - 1) == 1 (extraction precondition)",
+          math.gcd(D, prime_mod - 1) == 1)
 
-    # ARM 2: an unrelated composite of unknown order, fresh each run.
-    composite_mod = ut.generate_prime(256) * ut.generate_prime(256)
-
-    holds_p, recovered_p, decoy_p = _mount(DEFAULT_MOD, vals)
-    holds_c, recovered_c, decoy_c = _mount(composite_mod, vals)
+    holds_c, recovered_c, decoy_c = _mount(DEFAULT_MOD, vals)
+    holds_p, recovered_p, decoy_p = _mount(prime_mod, vals)
 
     # the bucket is structural: present under BOTH moduli. Asserting this
     # keeps the claim honest -- the SLOT was never removed, only what fills
     # it changed.
-    check("leak          : singleton bucket holds combined[0]**d (default prime)",
-          holds_p)
-    check("leak          : singleton bucket holds combined[0]**d (composite)",
+    check("leak          : singleton bucket holds combined[0]**d (default composite)",
           holds_c)
+    check("leak          : singleton bucket holds combined[0]**d (fresh prime)",
+          holds_p)
 
     # the actual fix: what's in that slot is provably decoy, independent of
     # the modulus -- checked under both so a regression here isn't masked
     # by which modulus happens to be default.
-    check("leak          : column 0 is provably decoy, not real item data (default prime)",
-          decoy_p)
-    check("leak          : column 0 is provably decoy, not real item data (composite)",
+    check("leak          : column 0 is provably decoy, not real item data (default composite)",
           decoy_c)
+    check("leak          : column 0 is provably decoy, not real item data (fresh prime)",
+          decoy_p)
 
-    # ARM 1 -- extraction against the shipped default succeeds, as expected
-    # for a prime modulus. Not a red flag: see the module docstring for why
-    # this is fine now that the recovered value is decoy either way.
-    check("leak ARM 1    : root extraction recovers the (junk) column under "
-          "the default prime modulus", recovered_p)
-
-    # ARM 2 -- defense in depth, demonstrating the decoy property doesn't
-    # depend on extraction failing: it fails here anyway (unrelated
-    # composite, unknown order), independently confirmed by decoy_c above.
+    # ARM 1 -- extraction against the shipped default fails: DEFAULT_MOD's
+    # order is unknown (RSA-2048 composite), so there is no exponent to
+    # invert. This is the modulus doing its job as a second layer, on top
+    # of (not instead of) the decoy property confirmed by decoy_c above.
     # phrased without the word FAIL: a CI step grepping output for that
     # string would otherwise false-positive on a passing run.
-    check("leak ARM 2    : root extraction does NOT recover the column under "
-          "an unrelated composite of unknown order", not recovered_c)
+    check("leak ARM 1    : root extraction does NOT recover the column under "
+          "the default composite modulus", not recovered_c)
+
+    # ARM 2 -- extraction succeeds against a modulus with known group
+    # order, as expected. Not a red flag: see the module docstring for why
+    # this is fine -- what's recovered is decoy either way, independently
+    # confirmed by decoy_p above.
+    check("leak ARM 2    : root extraction recovers the (junk) column under "
+          "a fresh known-order prime modulus", recovered_p)
 
 
 if __name__ == "__main__":

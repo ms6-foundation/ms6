@@ -1,14 +1,15 @@
 """The accumulator modulus: what DEFAULT_MOD must be, and that it is not baked in.
 
-DEFAULT_MOD is a fixed 256-bit prime. The documented leak in
-mul_combinations_mod is closed at the data level (see ms6.core's
-EDGE-COLUMN DECOY PADDING), so a prime modulus -- cheaply root-extractable,
-unlike a composite of unknown order -- costs nothing: what a successful
-extraction recovers is provably decoy, not real item data, regardless of
-the modulus. The property that does still matter is that the modulus is
-not baked into the protocol: ms6() records the one it used in the params
-dict, and ps6/vs6 read it from there, so a commitment under any other
-modulus -- prime or composite -- still verifies from its own params.
+DEFAULT_MOD is the RSA-2048 Factoring Challenge composite: 2048 bits,
+unknown order. The documented leak in mul_combinations_mod is independently
+closed at the data level (see ms6.core's EDGE-COLUMN DECOY PADDING), so
+what a successful extraction recovers is provably decoy, not real item
+data, regardless of the modulus -- the composite's unknown order is kept
+as a second, independent layer, not the sole thing standing between an
+attacker and real data. The property that does still matter is that the
+modulus is not baked into the protocol: ms6() records the one it used in
+the params dict, and ps6/vs6 read it from there, so a commitment under any
+other modulus -- prime or composite -- still verifies from its own params.
 """
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
@@ -24,9 +25,9 @@ def run(check):
     d, q, u_cs, u_bs = D, Q, U_CS, U_BS
     base = [mk(i) for i in range(12)]
 
-    check("modulus       : default is a 256-bit prime, identical across "
-          "ms6/vs6's copies",
-          DEFAULT_MOD.bit_length() == 256 and ut.is_prime(DEFAULT_MOD, k=64)
+    check("modulus       : default is a 2048-bit composite of unknown order, "
+          "identical across ms6/vs6's copies",
+          DEFAULT_MOD.bit_length() == 2048 and not ut.is_prime(DEFAULT_MOD, k=64)
           and DEFAULT_MOD == u.DEFAULT_MOD == V.DEFAULT_MOD)
 
     # The modulus travels in params, so a commitment under a DIFFERENT one
