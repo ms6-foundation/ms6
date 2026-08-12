@@ -28,6 +28,7 @@ the two files' outputs bit-for-bit would be a reasonable follow-up if
 this split is kept long-term.
 """
 import sys
+import hashlib
 from collections import Counter, defaultdict
 from itertools import combinations_with_replacement
 
@@ -94,6 +95,13 @@ DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
 # ord(ch)-48 lands it in slot 10 with no change to Acc.flush.
 PAD = ':'
 PAD_SLOT = 10
+
+# Must stay numerically identical to ms6.utils6's own copy -- see that
+# module's domain_hash/DOMAIN_HASH_BYTES comments for the full rationale
+# (SHAKE128, 128-bit collision resistance as a deliberate target, fixed-
+# width zero-padded output).
+DOMAIN_HASH_BYTES = 32
+DOMAIN_HASH_DIGITS = len(str(256 ** DOMAIN_HASH_BYTES - 1))
 
 _PLANES = {}
 _POWSET = None
@@ -193,6 +201,16 @@ class Utils:
             tot = tot * 10 + _Z(s.translate(tabs[j]))
 
         return int(tot)
+
+    def domain_hash(self, data):
+        """SHAKE128 digest of `data` (bytes), as a fixed-width decimal digit
+        string. Must stay byte-for-byte identical to ms6.utils6.Utils's own
+        copy -- see that module's docstring for the full rationale; vs6
+        needs this to independently recompute a claimed item's H1 (see
+        vs6.core's _vs6_batch), the same way it already needed hash() to
+        match ms6's copy before this change."""
+        digest = hashlib.shake_128(data).digest(DOMAIN_HASH_BYTES)
+        return str(int.from_bytes(digest, "big")).zfill(DOMAIN_HASH_DIGITS)
 
     def backward_chunk(self, ds, size):
         start = 0

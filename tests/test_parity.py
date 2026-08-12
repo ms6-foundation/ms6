@@ -82,6 +82,8 @@ def run(check):
         "DEFAULT_MOD": (u.DEFAULT_MOD, _vu.DEFAULT_MOD),
         "hash": ([ut.hash(v, k) for v in ints for k in (1, 3, 10)],
                  [_vut.hash(v, k) for v in ints for k in (1, 3, 10)]),
+        "domain_hash": ([ut.domain_hash(f"tag:{v}".encode()) for v in ints],
+                        [_vut.domain_hash(f"tag:{v}".encode()) for v in ints]),
         "backward_chunk": ([list(ut.backward_chunk(str(v), 12)) for v in ints],
                            [list(_vut.backward_chunk(str(v), 12)) for v in ints]),
         "cell_product": ([ut.cell_product(c, m) for c in cnts for m in (1, 3)],

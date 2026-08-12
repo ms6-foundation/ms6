@@ -65,17 +65,33 @@ def run(check):
 
     # -- _check_fits guard: replace() must refuse a value whose hash needs
     # more rows than its batch's current x, rather than silently truncate
-    # its low-order digits (see _check_fits's own docstring). Index 0 sits
-    # in a batch sized from small mk(i) items. mk()'s whole family is capped
-    # at 2**120 regardless of i, so no mk(i) reliably overflows another once
-    # real_width (chunk_size - rand_edge_size) shrank the margin -- an
-    # explicitly oversized value, independent of mk(), is used instead.
+    # its low-order digits (see _check_fits's own docstring).
+    #
+    # Historically an explicitly oversized VALUE (10**600+777) reliably
+    # triggered this, because the old hash() scaled its output width with
+    # the input's own magnitude. That lever is gone: item digests now come
+    # from Utils.domain_hash (SHAKE128), which is FIXED-width
+    # (DOMAIN_HASH_DIGITS decimal digits) regardless of the item's value --
+    # every item's h1s/h2s are the same length, so every batch's x (sized
+    # from the widest digest actually measured) ends up identical too, and
+    # no real value can ever exceed it anymore. That's a genuine
+    # improvement (no more input-magnitude-dependent digest width to leak
+    # or reason about), not a gap -- it just means the only way left to
+    # exercise this guard is to shrink a batch's x directly, simulating
+    # the scenario the guard exists for (a batch whose x predates a wider
+    # item than it was sized for).
+    b0 = 0 // u_bs
+    real_x = B.x_list[b0]
+    B.x_list[b0] = 1                      # artificially undersized
     try:
-        B.replace(0, 10 ** 600 + 777)
+        B.replace(0, mk(50))
         guard_rejected = False
     except ValueError:
         guard_rejected = True
-    check("_check_fits: replace() refuses an over-wide value instead of truncating",
+    finally:
+        B.x_list[b0] = real_x             # _check_fits raises before any
+                                           # mutation, so this fully restores B
+    check("_check_fits: replace() refuses a value when the batch's x is too narrow for it",
           guard_rejected)
 
     # -- stage 3: delete via tombstones ---------------------------------

@@ -1,4 +1,5 @@
 import sys
+import hashlib
 import secrets
 from collections import Counter, defaultdict
 from itertools import combinations_with_replacement
@@ -83,6 +84,22 @@ DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
 # ord(ch)-48 lands it in slot 10 with no change to Acc.flush.
 PAD = ':'
 PAD_SLOT = 10
+
+# domain_hash's output width: 32 bytes (256 bits) is the point past which
+# SHAKE128 stops buying any more collision resistance -- its 256-bit
+# capacity caps collision resistance at min(output_bits/2, 128), so 256
+# bits of output already reaches that 128-bit ceiling; asking for more
+# would only lengthen the digit string, not strengthen it. See
+# Utils.domain_hash's own docstring for why 128-bit is the deliberate
+# target rather than a shortfall.
+DOMAIN_HASH_BYTES = 32
+# Every domain_hash() output is zero-padded to this many decimal digits --
+# ceil(DOMAIN_HASH_BYTES * 8 * log10(2)) -- so item digests have a FIXED
+# width regardless of the item's own value, rather than the input-
+# magnitude-dependent width the old hash() produced. A fixed width means
+# grid depth (x, in ms6.core) no longer needs to be discovered by
+# measuring every item's digest before committing.
+DOMAIN_HASH_DIGITS = len(str(256 ** DOMAIN_HASH_BYTES - 1))
 
 _PLANES = {}
 _POWSET = None
@@ -279,6 +296,37 @@ class Utils:
             tot = tot * 10 + _Z(s.translate(tabs[j]))
 
         return int(tot)
+
+
+    def domain_hash(self, data):
+        """SHAKE128 digest of `data` (bytes), as a fixed-width decimal digit
+        string -- the item-level domain hash behind H1/H2 in ms6.core's
+        _hash_item, replacing the digit-substitution `hash()` above for
+        that specific use. `hash()` itself is UNCHANGED and still used
+        elsewhere (the seal-tree fold's per-batch hashing, hmax sizing) --
+        this is a new, separate primitive, not a replacement for those.
+
+        SHAKE128 rather than SHAKE256: this scheme's binding argument
+        already reduces item-digest collision resistance to an ordinary
+        hash-collision assumption (a separate, independent layer from the
+        per-cell prime encoding's own injectivity -- DIGIT_PRIMES). 128-bit
+        collision resistance is a deliberate, explicit target for that
+        layer -- the same effective floor SHA-256 itself has under the
+        generic birthday bound -- not an oversight; see the eprint's
+        binding section for the full argument. SHAKE128's larger rate
+        (smaller 256-bit capacity than SHAKE256's 512-bit one) buys
+        meaningfully faster hashing in exchange, at DOMAIN_HASH_BYTES=32
+        output the ceiling this construction is willing to pay for anyway.
+
+        Fixed-width, zero-padded output (DOMAIN_HASH_DIGITS decimal digits,
+        regardless of the digest's own leading zero bytes) rather than
+        stripping leading zeros -- a variable-width digest would leak
+        (weakly) through grid-row count if not otherwise masked, and would
+        reintroduce the "measure every item's actual digest width" dance
+        _ms6_batch's x-sizing used to need for the old, input-magnitude-
+        scaling hash()."""
+        digest = hashlib.shake_128(data).digest(DOMAIN_HASH_BYTES)
+        return str(int.from_bytes(digest, "big")).zfill(DOMAIN_HASH_DIGITS)
 
 
     def backward_chunk(self, ds,size):

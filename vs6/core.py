@@ -64,6 +64,13 @@ ut = u.Utils()
 DEFAULT_RAND_EDGE_SIZE = 6
 H_EDGE_TAG = "ms6-edge-h"
 
+# Must stay textually identical to ms6.core.H1_TAG -- _vs6_batch uses this
+# to independently recompute a claimed item's H1 via Utils.domain_hash
+# (SHAKE128), the same way ms6.core._hash_item computes it during commit.
+# vs6 never needs H2_TAG: H2/accS/S are prover-only, never reconstructed
+# here (see this module's own docstring).
+H1_TAG = "ms6-h1"
+
 
 def _front_back_edge_counts(rand_edge_size):
     return rand_edge_size // 2 + rand_edge_size % 2, rand_edge_size // 2
@@ -312,7 +319,7 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     # claimed iset items of digit_j**q -- exactly the factor ps6 deliberately
     # left out (see ps6's _ps6_batch docstring for why).
     if vals:
-        hm = [_s(ut.hash(val)) for val in vals]
+        hm = [ut.domain_hash(f"{H1_TAG}:{val}".encode()) for val in vals]
         M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm, rand_edge_size=rand_edge_size)
     else:
         M = [[1] * chunk_size for _ in range(x)]

@@ -117,6 +117,17 @@ DEFAULT_RAND_EDGE_SIZE = 6
 H_EDGE_TAG = "ms6-edge-h"
 S_EDGE_TAG = "ms6-edge-s"
 
+# Domain-separation tags for the item digest itself (H1/H2, see
+# _hash_item): H1_TAG for H1 = domain_hash(H1_TAG:val) (the H/accH side,
+# which vs6._vs6_batch must reproduce for claimed items -- see its own
+# H1_TAG copy) and H2_TAG for H2 = domain_hash(H2_TAG:H1) (the S/accS
+# side, prover-only, same no-cross-package-obligation note as S_EDGE_TAG
+# above). Tagging H2 off of H1 rather than off of `val` directly keeps H1
+# and H2 from being two evaluations of the same hash on related inputs
+# with no separation between them.
+H1_TAG = "ms6-h1"
+H2_TAG = "ms6-h2"
+
 
 def _front_back_edge_counts(rand_edge_size):
     """rand_edge_size split as (front, back): ceil(n/2) toward the
@@ -346,17 +357,34 @@ def _s0_grid(s, batch_index, rows, chunk_size, s_mod):
     return grid
 
 
-def _hash_item(val, s_exp):
+def _hash_item(val, s_exp=None):
     """One item's two independent hash-digit strings -- H1 (feeds accH, the
-    primary commitment grid) and H2 = hash(H1, s_exp) (feeds accS, the
-    blinding-side accumulator).
+    primary commitment grid) and H2 (feeds accS, the blinding-side
+    accumulator) -- both via Utils.domain_hash (SHAKE128), tagged apart by
+    H1_TAG/H2_TAG.
 
-    Split out of _item_rows so _ms6_batch can measure every item's actual
-    digest width BEFORE deciding how many rows (x) this batch's grid
-    needs -- see _ms6_batch's own x-sizing comment for why that ordering
-    matters."""
-    h1s = _s(ut.hash(val))
-    h2s = _s(ut.hash(h1s, s_exp))
+    This is a real cryptographic hash, unlike utils6.Utils.hash() (still
+    used elsewhere in this file -- the seal-tree fold, hmax sizing -- but
+    NOT here anymore): that function is a fixed, public digit-substitution
+    transform with no collision-resistance argument behind it, which is
+    exactly what the eprint's Open Problem on the domain hash used to flag
+    as an unproven assumption. domain_hash closes that: H1/H2 collision
+    resistance is now an ordinary SHAKE128 assumption, not a bespoke one.
+
+    domain_hash's output is fixed-width (DOMAIN_HASH_DIGITS decimal
+    digits, zero-padded) regardless of val's own magnitude, unlike the old
+    hash()'s input-magnitude-scaling output -- so unlike before, every
+    item's H1/H2 are the same length. _ms6_batch's x-sizing (measure the
+    widest digest actually hashed in a batch, then size x to it) still
+    runs unchanged: it simply always measures the same width now, rather
+    than needing to.
+
+    s_exp is accepted but unused -- kept only so callers that still pass
+    it positionally (tests/test_leak.py's direct use of H1 alone) don't
+    need updating; s_exp itself remains meaningful elsewhere in this
+    module (hmax sizing), just never fed into H1/H2 anymore."""
+    h1s = ut.domain_hash(f"{H1_TAG}:{val}".encode())
+    h2s = ut.domain_hash(f"{H2_TAG}:{h1s}".encode())
     return h1s, h2s
 
 
