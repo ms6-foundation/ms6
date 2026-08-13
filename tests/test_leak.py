@@ -101,7 +101,7 @@ def _decoy_only_col0(vals, hm, oset, r, red, mod, h1_salt=""):
     changed."""
     histogram = {}
     for i in oset:
-        h1s = ms6pkg.core._hash_item(vals[i], ms6pkg.core.DEFAULT_S_EXP, h1_salt)[0]
+        h1s = ms6pkg.core._hash_item(vals[i], h1_salt)[0]
         edge = ms6pkg.core._edge_digits(h1s, r, red, ms6pkg.core.H_EDGE_TAG)
         front_n, _ = ms6pkg.core._front_back_edge_counts(red)
         d0 = edge[0] if front_n > 0 else None

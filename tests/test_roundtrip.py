@@ -1,8 +1,6 @@
 """End-to-end commit -> open -> verify, at a realistic size.
 
 The smoke test: if this fails, nothing else in the suite is meaningful."""
-import multiprocessing
-
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
@@ -15,18 +13,9 @@ from tests.harness import (  # noqa: F401
 
 def run(check):
     chunk_size, d, q = 40, 3, 10
-    DEFAULT_MOD_ = DEFAULT_MOD
-
 
     WIDTH, DEPTH = 10, 4
     vals = [(1720941241 + (i**70) ^ (i**99)) % 2**200 for i in range(WIDTH ** DEPTH)]
-    # ps6/vs6's per-row payload scales with len(oset), i.e. with len(vals)
-    # here -- at small WIDTH**DEPTH like this default, row-parallel workers
-    # is a clear win. At larger scales each row's payload reaches hundreds
-    # of MB, and shipping that between worker processes via
-    # ProcessPoolExecutor's pickling can cost more than it saves -- prefer
-    # workers=1 there.
-    workers = multiprocessing.cpu_count()
     c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(vals, d, q, chunk_size=chunk_size)
 
     claims = {0: vals[0], 99: vals[99]}

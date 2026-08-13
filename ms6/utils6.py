@@ -104,7 +104,6 @@ DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
 # assigned to, rather than reusing a real digit. ':' is chr(58), so
 # ord(ch)-48 lands it in slot 10 with no change to Acc.flush.
 PAD = ':'
-PAD_SLOT = 10
 
 # domain_hash's output width: 32 bytes (256 bits) is the point past which
 # SHAKE128 stops buying any more collision resistance -- its 256-bit

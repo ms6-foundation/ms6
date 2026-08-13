@@ -6,7 +6,6 @@ OUTPUTS on identical inputs (not source text -- docstrings legitimately
 differ). This is the only check that catches drift in code no proof path
 happens to exercise."""
 import random as _random
-import time
 
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
@@ -19,12 +18,6 @@ from tests.harness import (  # noqa: F401
 
 
 def run(check):
-    d, q, u_cs, u_bs = D, Q, U_CS, U_BS
-    base = [mk(i) for i in range(12)]
-    extra = [mk(i) for i in range(100, 107)]
-    B = rebuilt(Commitment(base + extra, D, Q, chunk_size=U_CS,
-                           batch_size=U_BS, s_mod=ut.generate_prime(256)),
-                base + extra)
     # -- duplicated-copy parity ------------------------------------------
     # vs6/ deliberately DUPLICATES a slice of ms6/ (core.py and utils6.py)
     # utils6.py rather than importing them, so a verifier-only deployment
@@ -48,7 +41,6 @@ def run(check):
         check(f"copy parity   : {group}" + (f" -- DRIFTED: {', '.join(drifted)}" if drifted else ""),
               not drifted)
 
-    iden_ = f"{'':1>{12}}"
     svals = [str(ri(200)) for _ in range(15)]
     perm_ = _column_perm(12345, 12)
     prows = [''.join(prng.choice('123456789') for _ in range(12)) for _ in range(15)]
@@ -60,8 +52,8 @@ def run(check):
             _seal_batch(lv, 12, 2, 3, 10, mod_, sbs_), _V._seal_batch(lv, 12, 2, 3, 10, mod_, sbs_))
     pp = make_params(3, 10, 12, 5, mod_, 7)
     parity("ms6.py <-> vs6.py", {
-        "chunk_of": ([chunk_of(v, iden_, 3, 12) for v in svals],
-                     [_V.chunk_of(v, iden_, 3, 12) for v in svals]),
+        "chunk_of": ([chunk_of(v, 3, 12) for v in svals],
+                     [_V.chunk_of(v, 3, 12) for v in svals]),
         "_permute_row": ([_permute_row(r, perm_) for r in prows],
                          [_V._permute_row(r, perm_) for r in prows]),
         "_get_batch_ids": (_get_batch_ids(idxs, 1000), _V._get_batch_ids(idxs, 1000)),
@@ -98,7 +90,7 @@ def run(check):
                          [_vut.h_vector_mod(3, mod_, values=r) for r in vrows]),
         "fold_h_vector_mod": ([ut.fold_h_vector_mod(3, mod_, [r[:4], r[4:]], global_keys=True) for r in vrows],
                               [_vut.fold_h_vector_mod(3, mod_, [r[:4], r[4:]], global_keys=True) for r in vrows]),
-        "vsum_level_fold_mod": ([ut.vsum_level_fold_mod(3, mod_, r, global_keys=True) for r in vrows],
+        "vsum_level_fold_mod (global_keys=True)": ([ut.vsum_level_fold_mod(3, mod_, r, global_keys=True) for r in vrows],
                                 [_vut.vsum_level_fold_mod(3, mod_, r, global_keys=True) for r in vrows]),
         "convolve_h_vectors_mod": (ut.convolve_h_vectors_mod(A_, B_, 3, mod_),
                                    _vut.convolve_h_vectors_mod(A_, B_, 3, mod_)),
@@ -108,7 +100,7 @@ def run(check):
 
     _a1, _a2 = u.Acc(3, 12), _vu.Acc(3, 12)
     for _v in svals:
-        _r = chunk_of(_v, iden_, 3, 12)
+        _r = chunk_of(_v, 3, 12)
         _a1.add(_r); _a2.add(_r)
     _a1.flush(); _a2.flush()
     parity("Acc", {"Acc.cnt/rows": ((_a1.cnt, _a1.rows), (_a2.cnt, _a2.rows))})

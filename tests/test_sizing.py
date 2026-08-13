@@ -3,8 +3,6 @@
 x sizes accH/accS and hm's chunking; it is derived from the items' own
 hash widths, so it must not vary with the salt between commits of the
 same data."""
-import multiprocessing
-
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
@@ -17,7 +15,6 @@ from tests.harness import (  # noqa: F401
 
 def run(check):
     d, q, u_cs, u_bs = D, Q, U_CS, U_BS
-    base = [mk(i) for i in range(12)]
     # -- x-sizing: deterministic across salts, correct across parallelism --
     # x used to come from the per-batch salt's own decimal digit length, so
     # two commits of the SAME vals could get different x_list just because

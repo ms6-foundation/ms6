@@ -2370,3 +2370,89 @@ constant, its test coverage, and documentation). Not reflected in
 `docs/ms6_eprint.tex` (`Remark rem:mod-choice` and the efficiency
 section's 2048-vs-256 discussion still describe the old default) —
 pending explicit go-ahead, same as this session's established pattern.
+
+## 55. Dead-parameter and dead-variable cleanup
+
+**Request** — "cleanup unused variables and make the method signatures
+clean, for example DEFAULT_S_EXP is not in use."
+
+An Explore agent audited every module-level constant, function parameter,
+import, and local variable in `ms6/core.py`, `ms6/utils6.py`,
+`vs6/core.py`, `vs6/utils6.py` (plus a lighter pass over `tests/*.py`,
+`examples/*.py`). The flagged example was a false alarm — `DEFAULT_S_EXP`
+genuinely feeds `DEFAULT_HMAX_PAD_SIZE` and `hmax` sizing in `ms6()`/
+`Commitment.__init__` — but the audit found the *real* thing nearby: the
+`s_exp` *parameter*, once it reaches `_hash_item`, has been dead in that
+function's own body since the SHAKE128 domain-hash switch (entry ~50-ish)
+stopped feeding it into H1/H2, kept only for a docstring-documented
+backward-compat reason (one positional call in `tests/test_leak.py`).
+
+**Removed, both `ms6/` and `vs6/` copies where duplicated:**
+- `PAD_SLOT = 10` — assigned, never read; the behavior it documented
+  (padding's own count slot) is hardcoded directly in `Acc`/`chunk_of`.
+- `chunk_of`'s and `chunks`'s `iden` parameter — dead in both functions'
+  bodies in both packages; every caller computed `u.PAD * width` just to
+  hand it to a parameter nothing read. Updated every call site: `ms6.core`
+  (`_ms6_batch`, `_seal_chunker`, `Commitment._chunk_of`), `vs6.core`
+  (`interlace_mod`, `_seal_batch`), and the three direct test call sites
+  (`test_adversarial.py` ×2, `test_parity.py` ×3).
+- `_attach_edges`'s `back_n` — `_front_back_edge_counts()`'s second return
+  value, assigned, never read (the trailing slice `edge[front_n:]` doesn't
+  need it). Same in both copies.
+- `vs6.core.DEFAULT_RAND_EDGE_SIZE` — the *vs6-side* copy specifically;
+  never read anywhere in `vs6/` (`interlace_mod`/`_vs6_batch` default
+  `rand_edge_size=0` instead, and `vs6()` only ever takes it from
+  `params`). The `ms6.core` copy is genuinely used and untouched.
+  `docs/bench_efficiency.py`'s reference turned out to be `ms6.core`'s
+  copy (`from ms6 import core as core`), not this one.
+- `_finish_ps6`'s `q` parameter — unused in its body, one call site,
+  otherwise untested directly.
+- `_hash_item`'s `s_exp` parameter, and the same dead thread through
+  `_item_rows` and `_ms6_batch` (both took `s_exp` solely to forward it
+  to something that ignored it). Updated all eight call sites: `ms6()`'s
+  two `_ms6_batch` dispatches (sequential + `ProcessPoolExecutor`),
+  `Commitment._new_batch`'s and `._new_batches_parallel`'s `_ms6_batch`
+  calls (the second wasn't in the audit's original list — caught on a
+  post-edit grep sweep, a reminder to always re-verify mechanically
+  rather than trust a single enumeration pass), all four
+  `Commitment.append/replace/delete` calls to `_item_rows`, and
+  `test_leak.py`'s direct `_hash_item` call. `ms6()`'s and
+  `Commitment.__init__`'s own `s_exp` parameters are untouched — they
+  still feed `hmax` sizing directly and were never the dead part.
+
+**Bonus finding, fixed while in the area (not what was asked, but adjacent
+and cheap):** `tests/test_parity.py` had two dict entries both named
+`"vsum_level_fold_mod"` in the same literal (one plain, one
+`global_keys=True`) — Python dict literals silently keep only the last,
+so the first comparison's result was being computed and then discarded
+before ever reaching the `drifted` check, meaning a real regression in
+that specific case would not have been caught. Renamed the `global_keys`
+one to disambiguate; the previously-silent comparison is now actually
+part of the aggregate `copy parity: ms6.utils6 <-> vs6.utils6` check.
+
+**Also removed, unused imports/locals in test files** (found alongside,
+not separately requested, but same category and cheap): unused
+`import time` (`test_parity.py`) and `import multiprocessing`
+(`test_roundtrip.py`, `test_sizing.py`); dead local unpacks/assignments
+in `test_parity.py` (`d, q, u_cs, u_bs`, and an entire unused
+`base`/`extra`/`B = rebuilt(...)` block — confirmed `B` genuinely
+unreferenced there, unlike the *live* `B` in `test_params.py`/
+`test_sealtree.py`, which use it for `.opening()`/`.c` — checked each
+file individually rather than assuming the pattern generalized),
+`test_params.py` (`d, q, u_cs, u_bs`), `test_sealtree.py` (`u_bs` only —
+`d`/`q`/`u_cs` are genuinely used there), `test_sizing.py` (`base`), and
+`test_completeness.py` (`rnd = random.Random(7)`, entirely unused, plus a
+redundant inner `make_vals` redefinition that exactly duplicated the
+already-existing module-level one).
+
+### Verified — 2026-08-13
+
+`python3 -m tests`, three consecutive runs: all green, 78/78 (same count
+as before — the dict-key fix restores a comparison inside an existing
+aggregate check rather than adding a new one). `pyflakes` clean on all
+four core files and every touched test file (import-related warnings on
+untouched files are the pre-existing, intentional `tests.harness` `#
+noqa: F401` re-export pattern, not new).
+
+Not yet committed — cleanup only, pending confirmation before touching
+git.

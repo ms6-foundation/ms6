@@ -103,7 +103,6 @@ DIGIT_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29)
 # assigned to, rather than reusing a real digit. ':' is chr(58), so
 # ord(ch)-48 lands it in slot 10 with no change to Acc.flush.
 PAD = ':'
-PAD_SLOT = 10
 
 # Must stay numerically identical to ms6.utils6's own copy -- see that
 # module's domain_hash/DOMAIN_HASH_BYTES comments for the full rationale

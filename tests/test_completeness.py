@@ -11,7 +11,6 @@ Windows) each child re-imports this module. With the sweep at module level it
 re-ran inside every child, spawning recursively until the pool broke
 (BrokenProcessPool). See vs6/core.py's PLATFORM NOTE.
 """
-import random
 import sys
 
 sys.set_int_max_str_digits(2_000_000)
@@ -24,11 +23,6 @@ def make_vals(n):
 
 
 def run(check):
-    rnd = random.Random(7)
-
-    def make_vals(n):
-        return [(1720941241 + (i ** 70) ^ (i ** 99)) % 2 ** 200 for i in range(n)]
-
     configs = [
         # (N, batch_size, chunk_size, d, q, workers)  -> n_batches
         (300, 50, 10, 2, 4, 4),   # 6 batches, not divisible by 4 workers

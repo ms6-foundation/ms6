@@ -65,7 +65,6 @@ ut = u.Utils()
 # numerically/textually identical to ms6's copy -- H_EDGE_TAG in particular,
 # since interlace_mod has to reproduce a claimed item's own decoy digits
 # byte-for-byte from the claim alone.
-DEFAULT_RAND_EDGE_SIZE = 6
 H_EDGE_TAG = "ms6-edge-h"
 
 # Must stay textually identical to ms6.core.H1_TAG -- _vs6_batch uses this
@@ -91,7 +90,7 @@ def _edge_digits(digit_str, row_index, n, tag):
 def _attach_edges(row, digit_str, row_index, rand_edge_size, tag):
     if rand_edge_size <= 0:
         return row
-    front_n, back_n = _front_back_edge_counts(rand_edge_size)
+    front_n, _ = _front_back_edge_counts(rand_edge_size)
     edge = _edge_digits(digit_str, row_index, rand_edge_size, tag)
     return edge[:front_n] + row + edge[front_n:]
 
@@ -173,7 +172,7 @@ def unpack_params(params, expect=None):
     return tuple(params[k] for k in PARAM_KEYS)
 
 
-def chunk_of(val, iden, x, chunk_size):
+def chunk_of(val, x, chunk_size):
     """Digit rows for one value. Short first chunks and missing rows are
     filled with u.PAD, which occupies its own count slot and contributes no
     prime -- padding is deterministic and public, so it must not affect the
@@ -184,9 +183,9 @@ def chunk_of(val, iden, x, chunk_size):
     return [u.PAD * chunk_size] * (x - len(chunks)) + chunks
 
 
-def chunks(iden, x, chunk_size):
+def chunks(x, chunk_size):
     def internal(val):
-        return chunk_of(val, iden, x, chunk_size)
+        return chunk_of(val, x, chunk_size)
 
     return internal
 
@@ -218,8 +217,7 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
     decoys must be deterministic, not secret-random).
     """
     real_width = chunk_size - rand_edge_size
-    iden = u.PAD * real_width
-    chunk_of = chunks(iden, x, real_width)
+    chunk_of = chunks(x, real_width)
 
     def rows_of(val):
         # val is already a digit string: routing it through int() would
@@ -271,8 +269,7 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
 
     FLUSH = 4096
     accH = u.Acc(x, chunk_size)
-    iden = u.PAD * chunk_size
-    chunk_of = chunks(iden, x, chunk_size)
+    chunk_of = chunks(x, chunk_size)
     for t, val in enumerate(vals):
         hm1 = chunk_of(_s(ut.hash(val, 1)))
         accH.add(hm1)

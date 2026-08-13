@@ -16,7 +16,7 @@ from tests.harness import (  # noqa: F401
 
 
 def run(check):
-    d, q, u_cs, u_bs = D, Q, U_CS, U_BS
+    d, q, u_cs = D, Q, U_CS
     base = [mk(i) for i in range(12)]
     extra = [mk(i) for i in range(100, 107)]
     B = rebuilt(Commitment(base + extra, D, Q, chunk_size=U_CS,
