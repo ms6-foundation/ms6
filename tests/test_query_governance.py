@@ -26,7 +26,7 @@ from tests.harness import (  # noqa: F401
 
 def run(check):
     # -- the exact obs:ratio construction: {i1} then {i1, i0} -----------
-    gov = QueryGovernor(batch_size=20)          # default min_new_items=2
+    gov = QueryGovernor(batch_size=20)          # default min_new_items=3
     gov.authorize({5})
     blocked = False
     try:
@@ -36,28 +36,38 @@ def run(check):
     check("governance    : literal obs:ratio pair ({i1}, {i1,i0}) blocked",
           blocked)
 
-    # the mirror shape -- swapping one claimed item for another -- is the
-    # same symmetric-difference-1 pattern and must be caught too
-    gov2 = QueryGovernor(batch_size=20)
+    # the mirror shape -- swapping one claimed item for an unrelated one --
+    # is symmetric difference 2, not 1. It used to slip through at the old
+    # default (min_new_items=2), and demonstrably should not: it is a full,
+    # clean break (root-extract combined[] from each of the two single-item
+    # proofs via the pure-power entries every column's bucket carries, then
+    # cancel S(r,j) via ratio -- recovers BOTH items' actual digit at every
+    # real column via a 10x10 brute force; see QueryGovernor's own "WHY
+    # min_new_items=3" docstring). This is exactly why the default moved
+    # from 2 to 3.
+    gov2 = QueryGovernor(batch_size=20)          # default min_new_items=3
     gov2.authorize({5})
     blocked2 = False
     try:
-        gov2.authorize({6})                       # {5} ^ {6} == {5,6}, diff 2... not blocked by default
+        gov2.authorize({6})                       # {5} ^ {6} == {5,6}, diff 2
     except QueryPolicyViolation:
         blocked2 = True
-    check("governance    : disjoint single-item swap ({5},{6}) has symmetric "
-          "difference 2, NOT blocked by default min_new_items=2",
-          not blocked2)
+    check("governance    : disjoint single-item swap ({5},{6}) IS blocked "
+          "by the default (min_new_items=3, diff 2 < 3)", blocked2)
 
-    gov2b = QueryGovernor(batch_size=20, min_new_items=3)
+    # an operator can still explicitly opt into the looser min_new_items=2
+    # policy (e.g. accepting the residual risk for a use case that needs
+    # it) -- confirms the parameter itself still means what it says, only
+    # the DEFAULT changed
+    gov2b = QueryGovernor(batch_size=20, min_new_items=2)
     gov2b.authorize({5})
     blocked2b = False
     try:
         gov2b.authorize({6})
     except QueryPolicyViolation:
         blocked2b = True
-    check("governance    : same swap IS blocked once min_new_items=3 "
-          "(diff 2 < 3)", blocked2b)
+    check("governance    : the same swap is allowed under an explicit, "
+          "opted-into min_new_items=2 (diff 2 >= 2)", not blocked2b)
 
     # -- sufficiently different claim sets are allowed -------------------
     gov3 = QueryGovernor(batch_size=20, min_new_items=2)

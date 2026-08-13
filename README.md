@@ -140,10 +140,11 @@ exercises.
 
 `S`, the per-cell blinding grid, is fixed for the life of a commitment —
 folded into `c` itself at commit time, not re-derived per opening. Two
-openings of the same batch whose claim sets differ by one item can cancel
-`S` out of the ratio between them (see [Security](#security)). `ps6()`
-itself is unchanged and has no opinion on this; `QueryGovernor` is an
-optional policy layer in front of it:
+openings of the same batch whose claim sets differ by only a couple of
+items can cancel `S` out of the ratio between them and recover the
+differing items' actual data (see [Security](#security)). `ps6()` itself
+is unchanged and has no opinion on this; `QueryGovernor` is an optional
+policy layer in front of it:
 
 ```python
 from ms6 import QueryGovernor, ps6_governed
@@ -156,28 +157,38 @@ ps_list = ps6_governed(gov, {0, 17}, h_list, hm_list, s_list, params)
 ps6_governed(gov, {0}, h_list, hm_list, s_list, params)  # QueryPolicyViolation
 ```
 
-`min_new_items` (default `2`) sets how different a new claim set must be
-from every one already served against the same batch; `max_openings_per_batch`
-(default `None`, uncapped) caps how many distinct claim sets a batch will
-ever serve before an operator should reseal that batch under a fresh salt.
-It is a policy control, not a proof — see [Security](#security) for what it
-does and does not close.
+`min_new_items` (default `3`) sets how different a new claim set must be
+from every one already served against the same batch. It defaults to 3,
+not 2, because two ordinary, unrelated single-item claims against the
+same batch (symmetric difference 2) are a full, clean break under the
+shipped defaults — each proof's per-column values are individually
+root-extractable, and comparing two such proofs cancels `S` and recovers
+both claimed items' actual digits outright; `min_new_items=2` alone does
+not stop it. `max_openings_per_batch` (default `None`, uncapped) caps how
+many distinct claim sets a batch will ever serve before an operator
+should reseal that batch under a fresh salt. This is a policy control,
+not a proof — see [Security](#security) for what it does and does not
+close.
 
 ## Security
 
 Honest limitations, since this is a prototype:
 
 - **A structural exposure, neutralized at the data level rather than behind a
-  hardness assumption.** `mul_combinations_mod`'s combinatorial bucketing has
-  singleton buckets at the extremes (two fixed columns per row, plus a
-  `d`-dependent cascade of neighbors) that always hold raw, invertible
-  per-column values — reading one back costs one modular root extraction,
-  regardless of `mod`. Rather than raise that cost, the construction ensures
-  the read yields nothing: those columns are reserved for digits derived
-  deterministically from the item's own hash under a domain-separating tag,
-  disjoint from where real digit content is ever written. A successful
-  extraction is therefore always possible and always decoy — verified
-  numerically (`tests/test_leak.py`), not just argued structurally.
+  hardness assumption.** `mul_combinations_mod`'s combinatorial bucketing
+  gives EVERY column — not just the two combinatorial-extreme ones — a raw,
+  invertible pure-power term sitting at a publicly-computable position in its
+  own bucket: reading one back costs one modular root extraction, regardless
+  of `mod`. Rather than raise that cost, the construction ensures the read
+  yields nothing over the columns nearest each edge: those are reserved for
+  digits derived deterministically from the item's own hash under a
+  domain-separating tag, disjoint from where real digit content is ever
+  written. A successful extraction there is therefore always possible and
+  always decoy — verified numerically (`tests/test_leak.py`), not just
+  argued structurally. The remaining (real-data) columns are root-extractable
+  the same way, but a single such extraction alone reveals nothing on its
+  own — `S(r,j)` still blinds it; see the next point and `QueryGovernor`
+  above for what turns that extraction into actual exposure.
 - **The modulus's job is fingerprinting, not hiding — sized accordingly.**
   `DEFAULT_MOD` is a 256-bit nothing-up-my-sleeve prime (derived
   transparently from pi's digits — see its comment in `utils6.py`), not the
@@ -212,14 +223,19 @@ Honest limitations, since this is a prototype:
   batch's `H1` salt, and inverting the domain hash over the guessing space —
   nothing else in the construction narrows this further. It says nothing
   about the non-edge columns.
-- **Two things stay genuinely open.** Binding has no reduction to a named
-  hardness assumption — it rests on an empirical fingerprinting argument plus
-  the domain hash's assumed collision resistance, not a proof. And whether
-  many openings against the same batch (each individually unremarkable) could
-  be combined to leak more than the neutralized columns is unresolved;
-  `QueryGovernor` (above) mitigates the one concrete construction that's been
-  demonstrated, but is a policy control, not a proof of resistance to a more
-  general adversary.
+- **One thing stays genuinely open; the other is demonstrated, not just
+  suspected.** Binding has no reduction to a named hardness assumption — it
+  rests on an empirical fingerprinting argument plus the domain hash's
+  assumed collision resistance, not a proof; that part remains open.
+  Multi-query correlation over the non-edge columns is no longer just a
+  theoretical concern: two ordinary, unrelated single-item openings against
+  the same batch (symmetric difference 2, no crafted similarity needed) fully
+  recover both claimed items' actual digits at every real column, by root-
+  extracting each proof's per-column values and canceling `S(r,j)` via their
+  ratio. `QueryGovernor`'s default (`min_new_items=3`, above) blocks exactly
+  this shape; larger, still-permitted differences between claim sets leak a
+  messier but not obviously safe aggregate. This is a policy control, not a
+  proof of resistance to a more general multi-query adversary.
 
 `docs/ms6_eprint.tex` is the full formal treatment — construction, proofs,
 the exposure analysis, and a running list of open problems stated precisely.

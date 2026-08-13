@@ -1297,26 +1297,46 @@ class QueryGovernor:
     salt (a full reseal, out of scope for this class -- it just tracks
     when that's due).
 
-    WHY min_new_items, not min_new_items=1: the literal obs:ratio
-    construction queries claim sets differing by exactly one item
-    (symmetric difference 1) to cancel S(r,j) in the ratio between the two
-    proofs -- both the "add one claimed item" direction (I1={i1} then
-    I2={i1,i0}, as stated in the eprint) and its mirror, "drop one claimed
-    item" (I2 first, then I1), are symmetric difference 1 and are both
-    blocked once min_new_items >= 2. A THIRD shape -- swapping one claimed
-    item for a different one (I1={a} then I2={b}, a != b) -- is symmetric
-    difference 2, not 1 (the two claim sets share no elements at all), and
-    needs min_new_items >= 3 to catch; it is not blocked by the default.
-    This is deliberately NOT presented as a complete defense: a patient adversary
-    submitting many claim sets that are each individually >= min_new_items
-    away from every prior one can, in principle, still assemble a chain of
-    pairwise-permitted queries whose CUMULATIVE differences let it isolate
-    individual items' contributions (e.g. three queries A, B, C where no
-    pair is closer than min_new_items but A/C's own difference, or some
-    linear combination across all three, is small). Raising min_new_items
-    narrows that room but does not eliminate it; max_openings_per_batch is
-    the actual backstop, since it bounds how many queries an adversary
-    ever gets to chain in the first place. Defense in depth, not a proof.
+    WHY min_new_items=3, not 2: the literal obs:ratio construction queries
+    claim sets differing by exactly one item (symmetric difference 1) to
+    cancel S(r,j) in the ratio between the two proofs -- both the "add one
+    claimed item" direction (I1={i1} then I2={i1,i0}, as stated in the
+    eprint) and its mirror, "drop one claimed item" (I2 first, then I1),
+    are symmetric difference 1 and are both blocked once min_new_items >=
+    2. A THIRD shape -- swapping one claimed item for an unrelated one
+    (I1={a} then I2={b}, a != b) -- is symmetric difference 2, not 1 (the
+    two claim sets share no elements at all), and needs min_new_items >= 3
+    to catch.
+
+    That third shape is not a marginal case worth a lower priority than
+    the other two: it is a full, clean break, not a partial one. Every
+    column p -- edge or interior, not just the handful mul_combinations_mod's
+    own KNOWN LEAK comment calls out -- has a pure (p,...,p) combo sitting
+    in bucket idx=p*d at a publicly-computable list position, so
+    combined[j] = row[j] * S(r,j)^d is root-extractable column-by-column
+    from ONE proof alone (confirmed against the shipped defaults with an
+    ad-hoc verification script, same spirit as check_leak.py). A single
+    OTHER query with a disjoint single-item claim is then all it takes to
+    cancel S(r,j) via ratio and recover BOTH claimed items' actual digit
+    at every real column via a 10x10 brute force over DIGIT_PRIMES -- two
+    ordinary, unrelated single-item opens, no crafted similarity required.
+    min_new_items=3 is the default specifically because 2 does not stop
+    this.
+
+    This is deliberately NOT presented as a complete defense: a patient
+    adversary submitting many claim sets that are each individually >=
+    min_new_items away from every prior one can, in principle, still
+    assemble a chain of pairwise-permitted queries whose CUMULATIVE
+    differences let it isolate individual items' contributions (e.g.
+    three queries A, B, C where no pair is closer than min_new_items but
+    A/C's own difference, or some linear combination across all three, is
+    small) -- and even a single pair AT exactly min_new_items still leaks
+    the aggregate ratio of the differing items, just mixed across more
+    than one item's digits instead of cleanly isolated to one. Raising
+    min_new_items narrows the cleanly-exploitable room but does not
+    eliminate the underlying exposure; max_openings_per_batch is the
+    actual backstop, since it bounds how many queries an adversary ever
+    gets to chain in the first place. Defense in depth, not a proof.
 
     SCOPE: per-process, in-memory history. This does not survive a
     restart and does not coordinate across multiple prover processes/
@@ -1326,7 +1346,7 @@ class QueryGovernor:
     single governor instance. Flagged here rather than silently assumed.
     """
 
-    def __init__(self, batch_size=DEFAULT_BATCH_SIZE, min_new_items=2,
+    def __init__(self, batch_size=DEFAULT_BATCH_SIZE, min_new_items=3,
                  max_openings_per_batch=None, logger=None):
         """batch_size must match the commitment's own (ps6/vs6 read it
         from params; this class is handed it directly since it has no
