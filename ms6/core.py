@@ -36,7 +36,7 @@ DEFAULT_SEAL_BATCH_SIZE = 1000
 DEFAULT_SEAL_MOD_BITS = 256
 
 # Shared accumulator modulus for ms6/ps6/vs6's core arithmetic (cell products,
-# vsum_level_fold_mod, mul_combinations_mod, eval_level_mod). All three must use
+# vsum_level_mod, mul_combinations_mod, eval_level_mod). All three must use
 # the exact same value or verification of honest proofs fails.
 DEFAULT_MOD = u.DEFAULT_MOD
 
@@ -87,7 +87,7 @@ DEFAULT_S_Q = 7
 DEFAULT_S_EXP = 3
 DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
 
-# EDGE-COLUMN DECOY PADDING -- closes the singleton-bucket leak (see
+# EDGE-COLUMN PADDING -- closes the singleton-bucket leak (see
 # mul_combinations_mod's KNOWN LEAK docstring) at the DATA level instead of
 # the arithmetic level: eval_level_mod/mul_combinations_mod are untouched,
 # and instead the real per-item digit data simply never reaches the
@@ -96,16 +96,36 @@ DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
 #
 # chunk_of only ever encodes chunk_size - rand_edge_size REAL columns now;
 # the outer rand_edge_size columns (split front/back, see
-# _front_back_edge_counts) are filled with digits that are deterministic
-# but carry NO information about the item's real H1/H2 digest -- derived
-# via SHAKE-256 from the digest string itself plus a domain-separating
-# tag, the same pattern _s0_grid already uses for S's own per-cell
-# blinding. Deterministic (not secret-random) is required, not a
-# simplification: vs6's interlace_mod independently re-derives a claimed
-# item's own row contribution from the claim alone (see its docstring), so
-# whatever fills these columns must be something the VERIFIER can also
-# recompute from public data -- true secret randomness would make every
-# proof touching a claimed item unverifiable.
+# _front_back_edge_counts) are filled asymmetrically on the two sides that
+# feed them, per _rows_from_hash:
+#
+#   hm1 (H/accH side) gets FIXED PAD, not per-item decoy digits. vs6's
+#   interlace_mod must reproduce a claimed item's edge columns bit-for-bit
+#   to check them against H -- a public constant is the simplest thing
+#   that satisfies that, and it makes row[j] at every edge column
+#   IDENTICALLY 1 for ANY oset, not merely a value uncorrelated with real
+#   data. That in turn makes combined[j] = row[j]*S[j]^d collapse to
+#   S[j]^d at every edge column regardless of which items are claimed --
+#   so the ratio between ANY two proofs' edge-column values, against the
+#   same unresealed commitment, is always exactly 1. Not a bounded leak,
+#   no information at all (see tests/test_leak.py).
+#
+#   hm2 (S/accS side) gets digits derived from (h1_salt, slot_index,
+#   row_index) -- deterministic, but NOT derived from the item's own
+#   hash/value at all, unlike hm1's real columns (or this scheme's own
+#   pre-existing decoy design before this comment was last revised). This
+#   is deliberately NOT needed for the ratio-is-always-1 property above
+#   (that comes from hm1 alone -- S cancels in the ratio regardless of its
+#   own content or origin, since it's the same S in both proofs either
+#   way); it exists so S(edge) never carries anything derived from item
+#   CONTENT either, even in the single-proof case, while staying
+#   recomputable by the prover from data it already has (h1_salt plus the
+#   item's own slot position) -- no separate per-item storage needed.
+#   (A genuinely random alternative was tried and reverted: it bought no
+#   additional binding or hiding once hm1's fix was in place -- the
+#   ratio-cancellation attack it would have hardened against was already
+#   fully closed by hm1 alone -- and it cost Commitment's bit-identical
+#   incremental-vs-from-scratch rebuild property for nothing in return.)
 #
 # rand_edge_size must comfortably exceed the singleton-bucket cascade
 # depth for whatever `d` is in use (2*(d-1) columns from each edge, per
@@ -113,23 +133,14 @@ DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
 # the library's own default chunk_size=40.
 DEFAULT_RAND_EDGE_SIZE = 6
 
-# Domain-separation tags for edge-digit derivation: H_EDGE_TAG for hm1 (the
-# H/accH side, which vs6.interlace_mod must reproduce for claimed items)
-# and S_EDGE_TAG for hm2 (the S/accS side, prover-only -- vs6 never
-# reconstructs S, so this one has no cross-package agreement obligation,
-# but stays deterministic anyway for uniformity and so _item_rows/
-# _ms6_batch never disagree with each other on it).
-H_EDGE_TAG = "ms6-edge-h"
-S_EDGE_TAG = "ms6-edge-s"
-
 # Domain-separation tags for the item digest itself (H1/H2, see
 # _hash_item): H1_TAG for H1 = domain_hash(H1_TAG:h1_salt:val) (the
 # H/accH side, which vs6._vs6_batch must reproduce for claimed items --
 # see its own H1_TAG copy) and H2_TAG for H2 = domain_hash(H2_TAG:H1) (the
-# S/accS side, prover-only, same no-cross-package-obligation note as
-# S_EDGE_TAG above). Tagging H2 off of H1 rather than off of `val`
-# directly keeps H1 and H2 from being two evaluations of the same hash on
-# related inputs with no separation between them; it also means H2
+# S/accS side, prover-only -- vs6 never reconstructs S, so this one has no
+# cross-package agreement obligation). Tagging H2 off of H1 rather than off
+# of `val` directly keeps H1 and H2 from being two evaluations of the same
+# hash on related inputs with no separation between them; it also means H2
 # inherits h1_salt's effect automatically without its own copy of it.
 #
 # h1_salt (see _h1_salt) is the per-batch secret that keeps H1 from being
@@ -139,6 +150,16 @@ S_EDGE_TAG = "ms6-edge-s"
 H1_TAG = "ms6-h1"
 H2_TAG = "ms6-h2"
 
+# Domain-separation tag for hm2's edge derivation (see EDGE-COLUMN PADDING
+# above) -- keeps its hash input space separate from H1_TAG/H2_TAG's, even
+# though nothing currently collides them.
+S_EDGE_TAG = "ms6-edge-s"
+
+# Domain-separation tag for _seal_rows (the seal-tree/batch-combining
+# fold's per-value hashing -- see _seal_rows/_seal_batch). Keeps this
+# hash input space separate from H1_TAG/H2_TAG/S_EDGE_TAG's.
+SEAL_TAG = "ms6-seal"
+
 
 def _front_back_edge_counts(rand_edge_size):
     """rand_edge_size split as (front, back): ceil(n/2) toward the
@@ -146,30 +167,49 @@ def _front_back_edge_counts(rand_edge_size):
     return rand_edge_size // 2 + rand_edge_size % 2, rand_edge_size // 2
 
 
-def _edge_digits(digit_str, row_index, n, tag):
-    """n deterministic decimal-digit characters, reproducible by anyone
-    who knows digit_str (an item's own H1 digest string -- public once
-    hashed/claimed) -- via SHAKE-256, independent of chunk_of's real
-    per-column digits. row_index separates a multi-row item's rows from
-    each other; `tag` separates the H-side and S-side derivations."""
+def _attach_edges_pad(row, rand_edge_size):
+    """Widen one already-permuted, narrow (chunk_size - rand_edge_size)
+    real row back to chunk_size by prepending/appending u.PAD -- the same
+    convention chunk_of already uses for a short first chunk, contributing
+    no prime to cell_product_mod. Must run AFTER permutation, not before:
+    padding has to land at the true logical edges (index 0 /
+    chunk_size-1) regardless of how _column_perm shuffled the real
+    columns, since that's exactly where eval_level_mod/mul_combinations_
+    mod's singleton buckets look. Used for hm1 -- see EDGE-COLUMN PADDING
+    above for why a fixed constant, not per-item decoy digits, is what
+    actually closes the leak here."""
+    if rand_edge_size <= 0:
+        return row
+    front_n, back_n = _front_back_edge_counts(rand_edge_size)
+    return u.PAD * front_n + row + u.PAD * back_n
+
+
+def _edge_digits_s(h1_salt, slot_index, row_index, n):
+    """n deterministic decimal-digit characters for hm2's edges, derived
+    from the batch's own h1_salt and this item's SLOT POSITION -- not from
+    the item's own value/hash at all (see EDGE-COLUMN PADDING above for
+    why that matters and why genuine randomness was tried and reverted).
+    row_index separates a multi-row item's rows from each other, same
+    reasoning as hm1's own edge derivation used to have before it became a
+    fixed constant."""
     if n <= 0:
         return ""
     nbytes = max(n, 8)
-    digest = hashlib.shake_256(f"{tag}:{row_index}:{digit_str}".encode()).digest(nbytes)
+    digest = hashlib.shake_256(
+        f"{S_EDGE_TAG}:{h1_salt}:{slot_index}:{row_index}".encode()).digest(nbytes)
     return str(int.from_bytes(digest, "big")).zfill(n * 4)[-n:]
 
 
-def _attach_edges(row, digit_str, row_index, rand_edge_size, tag):
+def _attach_edges_s(row, h1_salt, slot_index, row_index, rand_edge_size):
     """Widen one already-permuted, narrow (chunk_size - rand_edge_size)
-    real row back to chunk_size by prepending/appending deterministic
-    decoy digits. Must run AFTER permutation, not before: the decoys have
-    to land at the true logical edges (index 0 / chunk_size-1) regardless
-    of how _column_perm shuffled the real columns, since that's exactly
-    where eval_level_mod/mul_combinations_mod's singleton buckets look."""
+    real row back to chunk_size using hm2's deterministic, item-value-
+    independent edge digits -- see _edge_digits_s. Used for hm2 only; hm1
+    uses _attach_edges_pad instead (see EDGE-COLUMN PADDING above for why
+    the two sides get different treatment)."""
     if rand_edge_size <= 0:
         return row
     front_n, _ = _front_back_edge_counts(rand_edge_size)
-    edge = _edge_digits(digit_str, row_index, rand_edge_size, tag)
+    edge = _edge_digits_s(h1_salt, slot_index, row_index, rand_edge_size)
     return edge[:front_n] + row + edge[front_n:]
 
 # NOTE: vs6 (the verifier) now lives in its own module, vs6.py, paired with
@@ -454,37 +494,45 @@ def _hash_item(val, h1_salt=""):
     return h1s, h2s
 
 
-def _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size):
+def _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size, h1_salt, slot_index):
     """Permuted, edge-padded digit rows for H (hm1) and S (hm2), from an
     item's already-computed hash strings. chunk_of/perm must already be
-    sized to the REAL width (chunk_size - rand_edge_size); decoy digits
-    are attached via _attach_edges AFTER permutation, so they land at the
-    true logical edges regardless of how the real columns were shuffled.
+    sized to the REAL width (chunk_size - rand_edge_size); edges are
+    attached AFTER permutation, so they land at the true logical edges
+    regardless of how the real columns were shuffled -- see EDGE-COLUMN
+    PADDING above for why hm1's edges are fixed PAD and hm2's are derived
+    from (h1_salt, slot_index, row_index) instead, not the same treatment.
+
     Shared by _item_rows (fresh hash) and _ms6_batch's own loop
     (pre-hashed, for the x-sizing reason documented there) so both derive
     an item's contribution identically -- the two must agree character-
-    for-character or the counts they add and subtract won't cancel."""
+    for-character or the counts they add and subtract won't cancel. That
+    now includes hm2's edges too: slot_index must be the SAME slot the
+    original commit used for this item, or the recomputed hm2 silently
+    disagrees with what's already folded into that batch's counts."""
     real1 = [_permute_row(r, perm) for r in chunk_of(h1s)]
     real2 = [_permute_row(r, perm) for r in chunk_of(h2s)]
-    hm1 = [_attach_edges(row, h1s, i, rand_edge_size, H_EDGE_TAG) for i, row in enumerate(real1)]
-    hm2 = [_attach_edges(row, h2s, i, rand_edge_size, S_EDGE_TAG) for i, row in enumerate(real2)]
+    hm1 = [_attach_edges_pad(row, rand_edge_size) for row in real1]
+    hm2 = [_attach_edges_s(row, h1_salt, slot_index, i, rand_edge_size)
+           for i, row in enumerate(real2)]
     return hm1, hm2
 
 
-def _item_rows(val, chunk_of, perm, rand_edge_size=0, h1_salt=""):
+def _item_rows(val, chunk_of, perm, rand_edge_size=0, h1_salt="", slot_index=0):
     """One item's permuted, edge-padded digit rows for the H side (hm1)
     and the S side (hm2), against an ALREADY-SIZED, ALREADY-NARROWED
     (chunk_size - rand_edge_size) chunk_of/perm pair (x fixed). See
     _rows_from_hash for the shared logic; this just adds the fresh hash
     step. Factored out of _ms6_batch's own loop so the incremental update
-    path (Commitment.append/replace) derives an item's contribution the
-    exact same way the original commit did -- the two must agree
+    path (Commitment.append/replace/delete) derives an item's contribution
+    the exact same way the original commit did -- the two must agree
     character-for-character or the counts they add and subtract won't
     cancel. h1_salt must be the SAME batch's h1_salt (see _h1_salt) the
-    original commit used, or the recomputed hm1/hm2 silently disagree
-    with what's already folded into that batch's counts."""
+    original commit used, and slot_index the SAME local index within the
+    batch, or the recomputed hm1/hm2 silently disagree with what's already
+    folded into that batch's counts."""
     h1s, h2s = _hash_item(val, h1_salt)
-    return _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size)
+    return _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size, h1_salt, slot_index)
 
 
 def _apply_rows(cnt, rows, sign):
@@ -525,7 +573,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
-        H = [ut.vsum_level_fold_mod(d, mod, values=H1) for H1 in H]
+        H = [ut.vsum_level_mod(d, mod, values=H1) for H1 in H]
 
     return ut.vsum_level(1, values=H, b=chunk_size), S
 
@@ -600,7 +648,7 @@ def _ms6_batch(vals, chunk_size, d, q, s, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
     hm = []
     chunk_of = chunks(x, real_width)
     for t, (h1s, h2s) in enumerate(hashed):
-        hm1, hm2 = _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size)
+        hm1, hm2 = _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size, h1_salt, t)
         if keep_hm:
             hm.append(hm1)
         accH.add(hm1)
@@ -659,6 +707,10 @@ def _ms6_batch(vals, chunk_size, d, q, s, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
     # h1_salt travels the same way and for the same reason: vs6 needs it to
     # recompute a claimed item's H1 identically (see _h1_salt); ps6 needs
     # no separate copy of it either, for the same reason it needs no perm.
+    # Commitment.append/replace/delete also reuse h1_salt (together with an
+    # item's own slot index) to recompute hm2 on demand -- see
+    # _item_rows/_attach_edges_s -- so no separate hm2 storage is needed
+    # there either.
     #
     # accH/accS's counts and the batch salt are returned for Commitment's
     # sake: the counts are what an update edits in place (no rehashing of
@@ -724,8 +776,39 @@ def _seal_chunker(x, chunk_size):
 def _seal_rows(val, chunk_of):
     """One folded value's digit rows, as _seal_batch accumulates them.
     Shared with _SealTree so a cached node can add or subtract exactly the
-    rows the flat fold would have contributed."""
-    return chunk_of(_s(ut.hash(val, 1)))
+    rows the flat fold would have contributed.
+
+    Hashes val via Utils.domain_hash (SHAKE128), tagged with SEAL_TAG --
+    the same real cryptographic hash _hash_item uses for H1/H2, rather
+    than utils6.Utils.hash() (still used elsewhere in this file: hmax
+    sizing, the secret-salt reseal's own hmax-derived bound -- but NOT
+    here anymore). ut.hash() is a fixed, public, per-digit substitution
+    table with no collision-resistance argument behind it; this fold is
+    binding-relevant in exactly the same way the row-level H1/H2 check
+    is (vs6.vs6 recomputes it and asserts the result equals c, see its
+    own docstring), so it deserves the same standard of hash, not a
+    weaker one smuggled in one level up.
+
+    domain_hash's output is fixed-width (DOMAIN_HASH_DIGITS decimal
+    digits) regardless of val's own magnitude, unlike ut.hash()'s
+    input-magnitude-scaling output -- see SEAL_FOLD_ROWS below for what
+    that means for callers sizing `x`."""
+    return chunk_of(ut.domain_hash(f"{SEAL_TAG}:{val}".encode()))
+
+
+# _seal_rows's output is now a FIXED DOMAIN_HASH_DIGITS-digit string
+# (domain_hash, not the old input-magnitude-scaling ut.hash), so the
+# number of rows any _seal_batch fold needs to hold one value without
+# truncation no longer depends on that value's own size -- it's this,
+# always. (_seal_batch's main fold, `x=max(x_list)`, is already >= this
+# for any real chunk_size/rand_edge_size combination, since x_list
+# itself is sized to hold a domain_hash-width H1/H2 digest per row over
+# a narrower real_width = chunk_size - rand_edge_size <= chunk_size; the
+# secret-salt reseal path is the one call site that used to size `x`
+# from its own operand's decimal length -- see ms6()'s reseal call --
+# and needs this instead now that that assumption no longer holds.)
+def _seal_fold_rows(chunk_size):
+    return -(-u.DOMAIN_HASH_DIGITS // chunk_size)
 
 
 def _seal_from_counts(cnt, chunk_size, d, q, mod):
@@ -735,7 +818,7 @@ def _seal_from_counts(cnt, chunk_size, d, q, mod):
     H = [[ut.cell_product_mod(cnt[i][j], q, mod) for j in range(chunk_size)]
              for i in range(len(cnt))]
 
-    H = [ut.vsum_level_fold_mod(d, mod, values=H1) for H1 in H]
+    H = [ut.vsum_level_mod(d, mod, values=H1) for H1 in H]
     return ut.vsum_level(1, values=H,b=chunk_size)
 
 
@@ -793,7 +876,9 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         # bit puts the prime at >= 2**hmax.bit_length() > hmax, always.
         seal_mod = _seal_mod(hmax.bit_length() + 1)
         s0 = gen.randrange(hmax)
-        s = _seal_batch([s0,s], chunk_size, 1+len(str(s0))//chunk_size, d, q, mod=seal_mod)
+        # x sized to _seal_rows's actual (now fixed) output width, not
+        # s0's own decimal length -- see _seal_fold_rows.
+        s = _seal_batch([s0,s], chunk_size, _seal_fold_rows(chunk_size), d, q, mod=seal_mod)
 
     starts = list(range(0, len(vals), batch_size))
 
@@ -960,6 +1045,15 @@ class Commitment:
     keeps. The equivalence that does hold, and is what the tests assert, is
     that delete() subtracts exactly what is in the slot: replace(i, X)
     followed by delete(i) lands on the same commitment as delete(i) alone.
+
+    NOTE ON hm2's edges (see ms6.core's EDGE-COLUMN PADDING comment): they
+    are derived from (h1_salt, slot_index, row_index) -- deterministic and
+    recomputable, like hm1's edges, just not from the item's own hash the
+    way hm1's real columns are. A genuinely random alternative was tried
+    and reverted: it added no binding or hiding beyond what hm1's own fix
+    already provides, and it broke bit-identical incremental-vs-from-
+    scratch equivalence for no offsetting benefit -- see ms6.core's own
+    comment for the fuller comparison.
     """
 
     def __init__(self, vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
@@ -1186,7 +1280,8 @@ class Commitment:
             return len(self.vals) - 1
 
         hm1, hm2 = _item_rows(val, self._chunk_of(last), self.perms[last],
-                              self.rand_edge_size, self.h1_salts[last])
+                              self.rand_edge_size, self.h1_salts[last],
+                              len(self.hm_list[last]))
         self._check_fits(last, val, hm1, hm2)
         _apply_rows(self.cntH[last], hm1, +1)
         _apply_rows(self.cntS[last], hm2, +1)
@@ -1210,8 +1305,8 @@ class Commitment:
         chunk_of, perm = self._chunk_of(b), self.perms[b]
 
         h1_salt = self.h1_salts[b]
-        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.rand_edge_size, h1_salt)
-        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.rand_edge_size, h1_salt)
+        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.rand_edge_size, h1_salt, local)
+        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.rand_edge_size, h1_salt, local)
         self._check_fits(b, new_val, new_h1, new_h2)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
@@ -1246,7 +1341,7 @@ class Commitment:
 
         old_h1, old_h2 = _item_rows(self.vals[index], self._chunk_of(b),
                                     self.perms[b], self.rand_edge_size,
-                                    self.h1_salts[b])
+                                    self.h1_salts[b], local)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
 

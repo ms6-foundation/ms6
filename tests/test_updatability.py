@@ -2,7 +2,11 @@
 
 Stages 1-2 assert the property that actually pins the incremental path
 down: an updated commitment is BIT-IDENTICAL to one built from scratch
-over the same final data (only checkable with the salts pinned).
+over the same final data (only checkable with the salts pinned). hm2's
+edges are deterministic (derived from h1_salt + slot index, see ms6.core's
+EDGE-COLUMN PADDING comment) -- not from the item's own value, but still a
+pure function of (vals, s, batch_salts) like everything else here, so this
+equivalence covers `c` itself, not just hm1.
 
 Stage 3 cannot have that property -- tombstoning keeps a slot a fresh
 commit would compact -- so it asserts the equivalence that does hold:

@@ -35,10 +35,7 @@ script (there's no module-top-level multiprocessing call here), but a
 top-level code with `if __name__ == "__main__":` for correctness on macOS/
 Windows (spawn start method) -- see ms6.py's and the demo files' own notes.
 """
-import hashlib
-
 from . import utils6 as u
-from .utils6 import _s
 
 DEFAULT_CHUNK_SIZE = 40
 DEFAULT_BATCH_SIZE = 1000
@@ -60,12 +57,14 @@ LEGACY_MOD_2048 = u.LEGACY_MOD_2048
 
 ut = u.Utils()
 
-# EDGE-COLUMN DECOY PADDING -- vs6's own copy of ms6.core's constants/
-# helpers (see that module's own comment for the full rationale). Must stay
-# numerically/textually identical to ms6's copy -- H_EDGE_TAG in particular,
-# since interlace_mod has to reproduce a claimed item's own decoy digits
-# byte-for-byte from the claim alone.
-H_EDGE_TAG = "ms6-edge-h"
+# EDGE-COLUMN PADDING -- vs6's own copy of ms6.core's helper (see that
+# module's own EDGE-COLUMN PADDING comment for the full rationale). hm1's
+# edges are fixed u.PAD, not per-item decoy digits, so interlace_mod below
+# just pads -- no tag, no per-item derivation, nothing that needs to stay
+# textually in sync with ms6's copy the way a hash-based scheme would.
+# hm2's edges (genuine SystemRandom, ms6-side only) have no verifier-side
+# counterpart at all: vs6 never reconstructs S (see this module's own
+# docstring), so there is nothing to mirror here for them.
 
 # Must stay textually identical to ms6.core.H1_TAG -- _vs6_batch uses this
 # to independently recompute a claimed item's H1 via Utils.domain_hash
@@ -74,25 +73,26 @@ H_EDGE_TAG = "ms6-edge-h"
 # here (see this module's own docstring).
 H1_TAG = "ms6-h1"
 
+# Must stay textually identical to ms6.core.SEAL_TAG -- _seal_batch below
+# uses this to independently recompute the same seal-tree/batch-combining
+# fold ms6.core._seal_rows uses, so the two sides' `c` match.
+SEAL_TAG = "ms6-seal"
+
 
 def _front_back_edge_counts(rand_edge_size):
     return rand_edge_size // 2 + rand_edge_size % 2, rand_edge_size // 2
 
 
-def _edge_digits(digit_str, row_index, n, tag):
-    if n <= 0:
-        return ""
-    nbytes = max(n, 8)
-    digest = hashlib.shake_256(f"{tag}:{row_index}:{digit_str}".encode()).digest(nbytes)
-    return str(int.from_bytes(digest, "big")).zfill(n * 4)[-n:]
-
-
-def _attach_edges(row, digit_str, row_index, rand_edge_size, tag):
+def _attach_edges_pad(row, rand_edge_size):
+    """Widen a narrow (chunk_size - rand_edge_size) real row back to
+    chunk_size by padding both edges with u.PAD -- must match ms6.core's
+    _attach_edges_pad exactly, since interlace_mod uses this to reconstruct
+    a claimed item's edge columns the same way ms6 committed them (see this
+    module's EDGE-COLUMN PADDING comment)."""
     if rand_edge_size <= 0:
         return row
-    front_n, _ = _front_back_edge_counts(rand_edge_size)
-    edge = _edge_digits(digit_str, row_index, rand_edge_size, tag)
-    return edge[:front_n] + row + edge[front_n:]
+    front_n, back_n = _front_back_edge_counts(rand_edge_size)
+    return u.PAD * front_n + row + u.PAD * back_n
 
 
 # Must match ms6.PARAM_KEYS. Duplicated rather than imported, in keeping with
@@ -209,12 +209,10 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
     claimed value's own chunked rows before the column-wise power/multiply,
     so M's columns line up with the same real digit positions ps6's
     row[j]/S[j] do. chunk_of is narrowed to chunk_size - rand_edge_size and
-    the SAME deterministic decoy digits ms6's _ms6_batch attached (see
-    _attach_edges/_edge_digits) are attached here too, AFTER permuting --
-    this is what lets a claimed item's edge columns reconstruct
-    byte-for-byte even though those columns were never real per-item
-    digest data to begin with (see ms6.core's own comment on why the
-    decoys must be deterministic, not secret-random).
+    then padded back out with the SAME fixed u.PAD ms6's _ms6_batch attaches
+    to hm1's edges (see _attach_edges_pad and ms6.core's EDGE-COLUMN PADDING
+    comment) -- a claimed item's edge columns reconstruct trivially, since
+    they're a public constant now rather than per-item content.
     """
     real_width = chunk_size - rand_edge_size
     chunk_of = chunks(x, real_width)
@@ -224,8 +222,7 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
         # discard leading zeros, which now index a prime like any other digit
         rows = chunk_of(val)[:x]
         permuted = [_permute_row(r, perm) for r in rows] if perm is not None else rows
-        return [_attach_edges(row, val, i, rand_edge_size, H_EDGE_TAG)
-                for i, row in enumerate(permuted)]
+        return [_attach_edges_pad(row, rand_edge_size) for row in permuted]
 
     def base(ch):
         """Digit -> its own prime; padding -> 1 (contributes nothing).
@@ -254,6 +251,10 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
     independently over the reconstructed per-batch h's and checks the
     result equals c.
 
+    Each value is hashed via Utils.domain_hash (SHAKE128), tagged with
+    SEAL_TAG -- must stay in lockstep with ms6.core._seal_rows's own copy,
+    or the two sides' folds diverge and no proof verifies.
+
     When `vals` is larger than seal_batch_size, it's folded hierarchically
     instead of in one Acc pass -- see ms6.py's _seal_batch docstring for the
     scheme. Must stay in lockstep with ms6.py's copy: the same seal_batch_size
@@ -271,7 +272,7 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
     accH = u.Acc(x, chunk_size)
     chunk_of = chunks(x, chunk_size)
     for t, val in enumerate(vals):
-        hm1 = chunk_of(_s(ut.hash(val, 1)))
+        hm1 = chunk_of(ut.domain_hash(f"{SEAL_TAG}:{val}".encode()))
         accH.add(hm1)
         if (t & (FLUSH - 1)) == FLUSH - 1:
             accH.flush()

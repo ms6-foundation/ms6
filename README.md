@@ -44,12 +44,6 @@ tests/                     78 checks; exits non-zero on failure
 examples/
   payroll_audit_demo.py      HR proves salaries to an auditor
   sanctions_screening_scale_demo.py   120k-record registry, bank checks 2
-docs/ms6_eprint.tex         the formal writeup — construction, completeness
-                              and binding arguments, the structural-exposure
-                              analysis and its neutralization, a formal
-                              edge-column hiding definition and theorem, and
-                              a running list of open problems (not tracked
-                              in git; build locally with pdflatex)
 ms6_vibe.md                development log — why each decision is what it is
 ```
 
@@ -205,23 +199,25 @@ Honest limitations, since this is a prototype:
   records the one it used in `params`, and `ps6`/`vs6` read it from there,
   so a commitment under any other modulus (prime or composite) still
   verifies from its own `params`.
-- **Item digests are a standard cryptographic hash.** `H1`/`H2` go through
-  SHAKE128 (`Utils.domain_hash`), not a bespoke transform — collision and
-  preimage resistance rest on SHAKE128's own published security claims. A
-  separate digit-substitution `hash()` still exists, but only for two
-  unrelated internal purposes (folding scalars in the cached fold tree,
-  sizing the secret salt's range) — it is not used for item hashing.
+- **Item digests, and the batch-combining fold, both go through a standard
+  cryptographic hash.** `H1`/`H2` (the per-item digest) and the seal-tree/
+  batch fold that combines per-batch scalars into the final commitment both
+  go through SHAKE128 (`Utils.domain_hash`), not a bespoke transform —
+  collision and preimage resistance rest on SHAKE128's own published
+  security claims. A separate digit-substitution `hash()` still exists, but
+  only for one remaining internal purpose (sizing the secret salt's range)
+  — it is not used for item hashing or the batch-combining fold anymore.
 - **`H1` is salted per batch**, closing an offline dictionary-attack gap:
   without a salt, anyone can hash a candidate value and compare it against a
   quantity extracted from a proof, with zero interaction — practical over a
   low-entropy item space (the stated use case: SSNs, names, DOBs). The salt
   is secret until any item in that batch is opened, same threat model as the
   blinding grid and column permutation.
-- **A formal hiding statement exists for the neutralized columns
-  specifically.** `docs/ms6_eprint.tex` defines a guessing game and proves an
-  adversary's advantage is bounded by exactly two things: recovering that
-  batch's `H1` salt, and inverting the domain hash over the guessing space —
-  nothing else in the construction narrows this further. It says nothing
+- **The neutralized (edge) columns carry no information, unconditionally.**
+  Their `H`-side content is a fixed public constant regardless of which
+  items are claimed, so the ratio between any two proofs' edge-column
+  values against the same commitment is always exactly 1 — not a bounded
+  leak, no information at all (`tests/test_leak.py`). This says nothing
   about the non-edge columns.
 - **One thing stays genuinely open; the other is demonstrated, not just
   suspected.** Binding has no reduction to a named hardness assumption — it
@@ -237,8 +233,6 @@ Honest limitations, since this is a prototype:
   messier but not obviously safe aggregate. This is a policy control, not a
   proof of resistance to a more general multi-query adversary.
 
-`docs/ms6_eprint.tex` is the full formal treatment — construction, proofs,
-the exposure analysis, and a running list of open problems stated precisely.
 `ms6_vibe.md` records what each mechanism defends against and what it does
 not, including several attempts that were tried and reverted.
 
