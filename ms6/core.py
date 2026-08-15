@@ -573,7 +573,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
-        H = [ut.vsum_level_mod(d, mod, values=H1) for H1 in H]
+        H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
 
     return ut.vsum_level(1, values=H, b=chunk_size), S
 
@@ -818,7 +818,7 @@ def _seal_from_counts(cnt, chunk_size, d, q, mod):
     H = [[ut.cell_product_mod(cnt[i][j], q, mod) for j in range(chunk_size)]
              for i in range(len(cnt))]
 
-    H = [ut.vsum_level_mod(d, mod, values=H1) for H1 in H]
+    H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
     return ut.vsum_level(1, values=H,b=chunk_size)
 
 

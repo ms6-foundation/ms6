@@ -403,7 +403,4 @@ class Utils:
             sum((p * v) % mod for p, v in zip(ps[idx], val_list)) % mod
             for idx, val_list in r.items()
         ]
-        # vsum_level_fold_mod (not vsum_level_mod directly): identical
-        # result, global_keys=True to reproduce vsum_level_mod's global
-        # bucket-position weighting rather than per-chunk local positions.
         return self.vsum_level_fold_mod(1, mod, bucket_sums, b=1, global_keys=True)

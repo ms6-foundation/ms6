@@ -267,11 +267,7 @@ class Utils:
 
     def seal_row_mod(self, args):
         """Modular counterpart of seal_row, for the ProcessPoolExecutor path.
-        Uses vsum_level_fold_mod (chunk_size=100, global_keys=True) rather
-        than vsum_level_mod directly -- identical result (verified
-        bit-identical, see test_fold_h_vector.py), same global column-
-        position weighting, just computed via chunked h_vector_mod +
-        Cauchy-product folding. Mirrors ms6's own row-seal choice (see
+        Uses vsum_level_mod directly. Mirrors ms6's own row-seal choice (see
         ms6.py)."""
         values, N, mod = args
         return int(self.vsum_level_fold_mod(N, mod, values, global_keys=True))
@@ -608,10 +604,7 @@ class Utils:
             sum((p * v) % mod for p, v in zip(ps[idx], val_list)) % mod
             for idx, val_list in r.items()
         ]
-        # vsum_level_fold_mod (not vsum_level_mod directly): identical
-        # result, global_keys=True to reproduce vsum_level_mod's global
-        # bucket-position weighting rather than per-chunk local positions --
-        # see ms6.py's row-seal for the same substitution/rationale.
+        # vsum_level_fold_mod, see ms6.py's row-seal for the same substitution/rationale.
         return self.vsum_level_fold_mod(1, mod, bucket_sums, b=1, global_keys=True)
 
 

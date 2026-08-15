@@ -287,7 +287,7 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
     H = [[ut.cell_product_mod(accH.cnt[i][j], q, mod) for j in range(chunk_size)]
              for i in range(accH.rows)]
 
-    H = [ut.vsum_level_mod(d, mod, values=H1) for H1 in H]
+    H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
     return ut.vsum_level(1, values=H, b=chunk_size)
 
 
