@@ -4,8 +4,8 @@ DEFAULT_MOD is a 256-bit prime (nothing-up-my-sleeve, derived from pi --
 see ms6.utils6's own comment), identical across ms6/vs6's copies. The modulus's job here is fingerprinting
 (Schwartz-Zippel), not hiding: the documented leak in mul_combinations_mod
 is independently closed at the data level (see ms6.core's EDGE-COLUMN
-DECOY PADDING), so what a successful extraction recovers is provably
-decoy, not real item data, regardless of the modulus. An unknown-order
+PADDING), so what a successful extraction recovers is a fixed public
+constant, not real item data, regardless of the modulus. An unknown-order
 modulus (the old RSA-2048 composite, kept as LEGACY_MOD_2048) was never
 load-bearing for that leak -- root-extraction hardness is not achievable
 via modulus choice under this construction at any size, mod a prime the

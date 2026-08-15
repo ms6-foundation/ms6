@@ -40,9 +40,10 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # Why prime is fine: the modulus's job here is fingerprinting (Schwartz-
 # Zippel), not hiding. The singleton-bucket leak documented in
 # mul_combinations_mod's docstring is closed at the data level (see
-# ms6.core's EDGE-COLUMN DECOY PADDING) -- the columns a root extraction
+# ms6.core's EDGE-COLUMN PADDING) -- the columns a root extraction
 # can reach never carry real per-item digest data, regardless of the
-# modulus, so what a successful extraction recovers is always decoy. An
+# modulus, so what a successful extraction recovers is a fixed public
+# constant, not data correlated with any item. An
 # unknown-order modulus was never load-bearing for that leak; it only ever
 # added a second, redundant layer, at the cost of modular exponentiation
 # scaling with a 2048-bit rather than 256-bit modulus throughout ps6/vs6 --
@@ -541,24 +542,24 @@ class Utils:
         and combined[L-2]*combined[L-1]**(N-1) -- products, not raw single-
         column values, but dividing out the already-recovered combined[0]/
         combined[L-1] cascades to combined[1] and combined[L-2] as well.
-        Verified empirically (check_leak.py): at chunk_size=40, d=3 (118
-        buckets), this is 4 singleton buckets -> 4 real columns recovered
-        per row (0, 1, 38, 39), not 2. The cascade is 2 columns deep at
-        d=3 because idx=1's combo only ever touches 2 distinct columns
-        (multiplicity N-1 and 1); larger d admits deeper cascades from
-        each end (idx=2 touches up to 3 distinct columns, etc.), so the
-        leaked-column count grows with d, not just chunk_size.
+        Verified empirically (tests/test_leak.py): at chunk_size=40, d=3
+        (118 buckets), this is 4 singleton buckets -> 4 real columns
+        recovered per row (0, 1, 38, 39), not 2. The cascade is 2 columns
+        deep at d=3 because idx=1's combo only ever touches 2 distinct
+        columns (multiplicity N-1 and 1); larger d admits deeper cascades
+        from each end (idx=2 touches up to 3 distinct columns, etc.), so
+        the leaked-column count grows with d, not just chunk_size.
 
         What actually closes this leak lives one layer up, in ms6.core:
         the columns this cascade can ever reach (the outer rand_edge_size
         of them, from each edge) never carry real per-item digest data to
-        begin with -- see ms6.core's EDGE-COLUMN DECOY PADDING comment and
-        _attach_edges/_edge_digits. A successful extraction here, against
-        any modulus, hands back a value that is provably decoy by
-        construction, not a rate-limited path to real data. DEFAULT_MOD's
+        begin with -- see ms6.core's EDGE-COLUMN PADDING comment and
+        _attach_edges_pad/_attach_edges_s. A successful extraction here,
+        against any modulus, hands back a single fixed public constant,
+        not a rate-limited path to real data. DEFAULT_MOD's
         unknown group order (see its own comment in this file) is kept
         anyway as a second, independent layer against any column this
-        leak reaches that the decoy padding did not already neutralize.
+        leak reaches that the edge padding did not already neutralize.
 
         eval_level_rec_mod/mul_combinations_rec_mod (below) trade this for
         a materially larger leak (every column invertible, not just a
@@ -726,8 +727,8 @@ class Utils:
         dataset (e.g. chunk_size-1), not each group's own local max key;
         passing the same global C into every group's h_vector_mod call is
         what makes fold_h_vector_mod's result match a single vsum_level_mod
-        call over the unsplit values -- see fold_h_vector_mod's docstring
-        and test_fold_h_vector.py."""
+        call over the unsplit values, provided the caller also passes
+        global_keys=True there -- see fold_h_vector_mod's docstring."""
         values = list(values)
         keys = list(range(len(values))) if keys is None else list(keys)
         pairs = [(k, v) for k, v in zip(keys, values) if v]
@@ -787,9 +788,16 @@ class Utils:
         sequence, not just "a" valid packing of the same values.
 
         Verified against vsum_level_mod's own single-pass h_N -- bit-
-        identical, same b, same flattened value list, both with and
-        without global_keys -- across randomized group counts/sizes/
-        degrees/moduli (see test_fold_h_vector.py).
+        identical, same b, same flattened value list -- PROVIDED the
+        caller passes global_keys=True; global_keys=False computes a
+        different (locally-weighted) value on purpose, per the two
+        paragraphs above, not a bug. A caller that wants
+        vsum_level_fold_mod's output to match vsum_level_mod's over the
+        same values MUST pass global_keys=True explicitly -- the default
+        is False, and every call site that omitted it while splitting a
+        real row/list into more than one group silently computed the
+        wrong scalar (found and fixed across ms6.core/vs6.core, see
+        ms6_vibe.md).
         """
         groups = [list(g) for g in group_values if list(g)]
         acc = None

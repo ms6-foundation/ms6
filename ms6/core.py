@@ -415,16 +415,20 @@ def _h1_salt(s, batch_index):
 
     WHY: domain_hash(H1_TAG:val) with no salt lets anyone precompute H1
     for any candidate value entirely offline, with zero interaction --
-    the domain hash's one-wayness (Open Problem op:hiding in the eprint)
+    the domain hash's one-wayness (Open Problem op:hash in the eprint)
     only stops INVERTING an unknown digest, not VERIFYING a guessed value
-    against one, which is the actual attack the singleton-bucket ratio
-    trick (Observation obs:ratio) enables once combined with an unsalted
-    hash: query the same commitment with two claim sets differing by one
-    item, cancel S(r,j) out, and the residual is Edge(H1(i0), ...) -- a
-    known, checkable function of the unclaimed item's own H1. For a
-    low-entropy item space (this construction's own stated use case,
-    sanctions/watchlist screening -- SSNs, names, DOBs), that check is
-    cheap enough to run over the whole plausible universe.
+    against one, which is the actual attack the two-query ratio trick
+    (Observation obs:ratio) enables once combined with an unsalted hash:
+    query the same commitment with two claim sets differing by one item,
+    cancel S(r,j) out, and at an INTERIOR (non-edge) column the residual
+    is the unclaimed item's own real digit there -- a known, checkable
+    function of the item's H1 once a candidate value is guessed. (At an
+    edge column the residual is a fixed public constant regardless of
+    h1_salt or anything else -- see EDGE-COLUMN PADDING above -- so this
+    salt's job is specifically about the interior columns, not the edge
+    ones.) For a low-entropy item space (this construction's own stated
+    use case, sanctions/watchlist screening -- SSNs, names, DOBs), that
+    check is cheap enough to run over the whole plausible universe.
 
     Mixing a per-batch secret in raises the bar from "guess offline,
     zero interaction" to "obtain at least one opening from this batch
@@ -1077,7 +1081,7 @@ class Commitment:
         self.seal_batch_size = seal_batch_size
         # captured, not re-read from the constant: a changed
         # DEFAULT_RAND_EDGE_SIZE would otherwise change which columns are
-        # decoy on the next reseal/update, corrupting this commitment.
+        # edge-padded on the next reseal/update, corrupting this commitment.
         self.rand_edge_size = rand_edge_size
         # captured, not re-read from the constant: a changed DEFAULT_S_Q
         # would otherwise rebuild S differently on the next reseal and
@@ -1410,7 +1414,7 @@ class QueryGovernor:
     in bucket idx=p*d at a publicly-computable list position, so
     combined[j] = row[j] * S(r,j)^d is root-extractable column-by-column
     from ONE proof alone (confirmed against the shipped defaults with an
-    ad-hoc verification script, same spirit as check_leak.py). A single
+    ad-hoc verification script, same spirit as tests/test_leak.py). A single
     OTHER query with a disjoint single-item claim is then all it takes to
     cancel S(r,j) via ratio and recover BOTH claimed items' actual digit
     at every real column via a 10x10 brute force over DIGIT_PRIMES -- two

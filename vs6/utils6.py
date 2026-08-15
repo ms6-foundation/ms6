@@ -60,10 +60,10 @@ sys.set_int_max_str_digits(2000000)          # results are routinely thousands o
 # top 256 significant binary bits, then advanced to the first prime
 # satisfying gcd(3, p-1) == 1. See ms6.utils6's own copy of this constant
 # for the full derivation and rationale (the modulus's job here is
-# fingerprinting, not hiding -- the edge-column decoy padding is what
-# closes the singleton-bucket leak at the data level, regardless of
-# modulus; root-extraction hardness was never achievable via modulus
-# choice under this construction at any size).
+# fingerprinting, not hiding -- the edge-column padding is what
+# closes the singleton-bucket leak at the data level, unconditionally and
+# regardless of modulus; root-extraction hardness was never achievable
+# via modulus choice under this construction at any size).
 #
 # Must stay numerically identical to ms6.utils6.DEFAULT_MOD -- see this
 # file's own module docstring for why the two copies exist and how they're
@@ -330,8 +330,11 @@ class Utils:
 
     def fold_h_vector_mod(self, N, mod, group_values, b=1, global_keys=False):
         """See ms6.utils6.Utils.fold_h_vector_mod for the full identity and
-        rationale -- vs6 only ever reaches this via vsum_level_fold_mod
-        (below), always with global_keys=True."""
+        rationale, including the global_keys=True requirement for this to
+        match vsum_level_mod over the same (unsplit) values -- vs6 reaches
+        this via vsum_level_fold_mod (below), from both mul_combinations_mod
+        and vs6.core._seal_batch's row-seal fold, and both call sites must
+        pass global_keys=True for the same reason."""
         groups = [list(g) for g in group_values if list(g)]
         acc = None
 
@@ -368,8 +371,8 @@ class Utils:
         `mod` is prime, harder if it's a composite of unknown order. The
         buckets are structural, but the columns this reaches never carry
         real per-item digest data in the first place (ms6.core's
-        EDGE-COLUMN DECOY PADDING), so what a successful extraction hands
-        back is decoy either way."""
+        EDGE-COLUMN PADDING), so what a successful extraction hands
+        back is a single fixed public constant either way."""
         L = len(vals)
 
         powers = [[1] * (N + 1) for _ in range(L)]

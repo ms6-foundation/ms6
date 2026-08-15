@@ -29,12 +29,13 @@ HONESTY NOTE: same caveat as payroll_audit_demo.py -- this is the
 project's research-prototype protocol, not an audited zk-SNARK. At this
 chunk_size/d, 4 of the 40 columns per row are always recoverable via
 modular root extraction (mul_combinations_mod's documented structural
-exposure); the reference implementation neutralizes this at the data
-level (those columns never carry real digit content -- see docs/
-ms6_eprint.tex's decoy-padding section and README's Security section),
-verified numerically rather than merely argued. Binding still has no
-formal reduction, and whether repeated openings against one batch could
-leak more than a single opening does remains an open question.
+exposure); the reference implementation neutralizes this unconditionally
+at the data level (those columns are a fixed public constant, never real
+digit content -- see docs/ms6_eprint.tex's edge-column padding section
+and README's Security section), verified numerically rather than merely
+argued. The interior (non-edge) columns are a separate, still-open
+exposure under repeated querying, only mitigated at the deployment-policy
+level (QueryGovernor). Binding still has no formal reduction, either.
 
 PLATFORM NOTE: ms6/ps6/vs6 use ProcessPoolExecutor for parallelism when
 workers>1. All executable code below is wrapped in `if __name__ ==
