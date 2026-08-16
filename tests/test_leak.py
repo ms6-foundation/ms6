@@ -86,7 +86,7 @@ from tests.harness import (  # noqa: F401
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
     _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
     _permute_row, _get_batch_ids, DEFAULT_MOD, LEGACY_MOD_2048, ut, gen, u, M, V,
-    ms6pkg, vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
+    vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
 )
 
@@ -134,8 +134,8 @@ def _mount(mod, vals):
     Returns (bucket_holds_value, recovered_matches_truth, row0_is_one,
     invariant_across_claims, all_edges_one, all_edges_invariant).
     """
-    c, hl, xl, sl, hml, pl, h1sl, params = ms6(vals, D, Q, chunk_size=CS, batch_size=BS,
-                                               mod=mod, s=SALT)
+    _, hl, _, sl, hml, _, _, params = ms6(vals, D, Q, chunk_size=CS, batch_size=BS,
+                                          mod=mod, s=SALT)
     iset_a, iset_b = {3}, {11}          # two ordinary, disjoint single-item claims
     ps_a = ps6(iset_a, hl, hml, sl, params)
     ps_b = ps6(iset_b, hl, hml, sl, params)

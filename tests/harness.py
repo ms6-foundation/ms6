@@ -9,7 +9,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import ms6 as ms6pkg                                              # noqa: E402
 import vs6 as vs6pkg                                              # noqa: E402
 from ms6 import core as M                                         # noqa: E402
 from ms6 import utils6 as u                                       # noqa: E402

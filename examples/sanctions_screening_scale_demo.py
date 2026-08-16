@@ -154,7 +154,7 @@ def main():
     print(f"   N_RECORDS={N_RECORDS:,}.)")
     print()
 
-    live_registry, t_live_commit = bench(
+    live_registry, _ = bench(
         f"build live {UPDATE_N:,}-record Commitment",
         lambda: Commitment(registry[:UPDATE_N], D, Q, chunk_size=CHUNK_SIZE, batch_size=BATCH_SIZE, workers=WORKERS))
 

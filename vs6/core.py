@@ -242,7 +242,7 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
     return H
 
 
-def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
     """Folds a list of big-int h scalars into a single scalar: hash+chunk+
     accumulate each value, then row-seal + combine -- identical logic to
     ms6.py's own _seal_batch (duplicated here, not imported, per this
@@ -277,12 +277,6 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEA
         if (t & (FLUSH - 1)) == FLUSH - 1:
             accH.flush()
     accH.flush()
-
-    if mod is None:
-        H = [[ut.cell_product(accH.cnt[i][j], q) for j in range(chunk_size)]
-                     for i in range(accH.rows)]
-        H = [ut.vsum_level(d, values=H1) for H1 in H]
-        return ut.vsum_level(1, values=H, b=chunk_size)
 
     H = [[ut.cell_product_mod(accH.cnt[i][j], q, mod) for j in range(chunk_size)]
              for i in range(accH.rows)]

@@ -4,18 +4,17 @@ ms6/utils6.py: it
 contains ONLY the primitives vs6's own call graph actually touches --
 hash, mul_combinations_mod and its full dependency chain
 (vsum_level_fold_mod -> fold_h_vector_mod -> h_vector_mod,
-convolve_h_vectors_mod), vsum_level/vsum_level_mod, cell_product/
+convolve_h_vectors_mod), vsum_level, cell_product/
 cell_product_mod, backward_chunk, and the Acc class -- duplicated here
 rather than imported from ms6/utils6.py, so this module plus vs6/core.py form a
 complete, independent package with zero import-time dependency on the
 prover's code (ms6/core.py, ms6/utils6.py).
 
 Deliberately EXCLUDED (prover-only, never reached from vs6's call graph):
-col_digit_counts, cell_pow_product(_mod), seal_row_mod, eval_level(_mod),
-eval_level_rec_mod, mul_combinations (non-mod)/mul_combinations_rec_mod,
-hash_sha256/hash_poseidon (unused prototypes), and everything in ms6/core.py
-that generates or handles the secret salt (SystemRandom, _column_perm's
-generation -- vs6 only ever *receives* a perm, never derives one).
+col_digit_counts, cell_pow_product_mod, seal_row_mod, eval_level_mod, and
+everything in ms6/core.py that generates or handles the secret salt
+(SystemRandom, _column_perm's generation -- vs6 only ever *receives* a
+perm, never derives one).
 
 Rationale: a party deploying only the verifier (e.g. a bank checking a
 sanctions-registry proof, see zk_sanctions_screening_scale_demo.py) can
@@ -274,34 +273,11 @@ class Utils:
                 dp[c] += dp[c - 1] * w
         return dp[N]
 
-    def vsum_level_mod(self, N, mod, keys=None, values=range(1, 10), b=1):
-        """Modular counterpart of vsum_level."""
-        values = list(values)
-        keys = list(range(len(values))) if keys is None else list(keys)
-        pairs = [(k, v) for k, v in zip(keys, values) if v]
-        if not pairs or N <= 0:
-            return 0
-        M = 10 ** b
-        C = max(k for k, v in pairs)
-
-        if N == 1:
-            total = 0
-            for k, v in pairs:
-                total = (total + v * pow(M, C - k, mod)) % mod
-            return total
-
-        W = [(v * pow(M, C - k, mod)) % mod for k, v in pairs]
-        W.sort()
-        dp = [0] * (N + 1)
-        dp[0] = 1
-        for w in W:
-            for c in range(1, N + 1):
-                dp[c] = (dp[c] + dp[c - 1] * w) % mod
-        return dp[N]
-
     def h_vector_mod(self, N, mod, keys=None, values=range(1, 10), b=1, C=None):
-        """Same DP as vsum_level_mod, but returns the whole [h_0..h_N]
-        vector -- needed by fold_h_vector_mod's Cauchy-product fold (see
+        """The modular h_N DP (same (k, key) -> weight convention as
+        vsum_level, weight = M**(C-k), evaluated via pow(..., mod) instead
+        of exact exponentiation), returning the whole [h_0..h_N] vector --
+        needed by fold_h_vector_mod's Cauchy-product fold (see
         mul_combinations_mod's call chain)."""
         values = list(values)
         keys = list(range(len(values))) if keys is None else list(keys)
@@ -316,7 +292,7 @@ class Utils:
         dp = [0] * (N + 1)
         dp[0] = 1
         for w in W:
-            for c in range(1, N + 1):          # ascending, same as vsum_level_mod -- repeats allowed (h_N, not e_N)
+            for c in range(1, N + 1):          # ascending, same as vsum_level -- repeats allowed (h_N, not e_N)
                 dp[c] = (dp[c] + dp[c - 1] * w) % mod
         return dp
 
@@ -331,7 +307,7 @@ class Utils:
     def fold_h_vector_mod(self, N, mod, group_values, b=1, global_keys=False):
         """See ms6.utils6.Utils.fold_h_vector_mod for the full identity and
         rationale, including the global_keys=True requirement for this to
-        match vsum_level_mod over the same (unsplit) values -- vs6 reaches
+        match a single unsplit h_N call over the same values -- vs6 reaches
         this via vsum_level_fold_mod (below), from both mul_combinations_mod
         and vs6.core._seal_batch's row-seal fold, and both call sites must
         pass global_keys=True for the same reason."""

@@ -36,8 +36,8 @@ DEFAULT_SEAL_BATCH_SIZE = 1000
 DEFAULT_SEAL_MOD_BITS = 256
 
 # Shared accumulator modulus for ms6/ps6/vs6's core arithmetic (cell products,
-# vsum_level_mod, mul_combinations_mod, eval_level_mod). All three must use
-# the exact same value or verification of honest proofs fails.
+# vsum_level_fold_mod, mul_combinations_mod, eval_level_mod). All three must
+# use the exact same value or verification of honest proofs fails.
 DEFAULT_MOD = u.DEFAULT_MOD
 
 # The former default -- see u.LEGACY_MOD_2048's own comment for why it is
@@ -739,7 +739,7 @@ def _seal_mod(bits):
     return ut.generate_prime(max(bits, DEFAULT_SEAL_MOD_BITS))
 
 
-def _seal_batch(vals, chunk_size, x, d, q, mod=None, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
     """Folds a list of big-int h scalars into a single scalar: hash+chunk+
     accumulate each value, then row-seal + combine, exactly like
     _ms6_batch's own H does for one row -- just one level up.
@@ -1659,10 +1659,12 @@ def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=N
 def _finish_ps6(result, d, workers, mod):
     # eval_level_mod (combinatorial enumeration over combinations_with_
     # replacement) leaks a handful of edge columns per row via modular root
-    # extraction, at the cost of combinatorial blow-up for large d. This is
-    # a deliberate tradeoff: eval_level_rec_mod is a documented alternative
-    # that reaches large d at the cost of a materially larger leak (every
-    # column, not a handful) -- intentionally not wired in here.
+    # extraction, at the cost of combinatorial blow-up for large d -- see
+    # its own docstring's KNOWN LEAK discussion. This construction only
+    # supports the small-d regime that combinatorial blow-up keeps
+    # tractable; reaching larger d without that blow-up would need a
+    # fundamentally different (and, per the same discussion, more leaky)
+    # enumeration strategy, not something wired into this codebase.
     if workers and workers > 1 and len(result) > 1:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:

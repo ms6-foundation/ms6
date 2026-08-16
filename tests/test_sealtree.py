@@ -10,7 +10,7 @@ from tests.harness import (  # noqa: F401
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
     _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
     _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
-    ms6pkg, vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
+    vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
 )
 

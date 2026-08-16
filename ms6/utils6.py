@@ -214,24 +214,15 @@ class Utils:
         return [Counter(big[j::chunk_size]) for j in range(chunk_size)]
     
     
-    def cell_pow_product(self, cnt, mult):
-        """prod(DIGIT_PRIMES[v]**cnt[v] for v in 0..9) ** mult.
+    def cell_pow_product_mod(self, cnt, mult, mod):
+        """prod(DIGIT_PRIMES[v]**cnt[v] for v in 0..9) ** mult, every power
+        and the running product reduced mod `mod` via 3-argument pow()
+        instead of computed exactly.
 
         One distinct prime per digit, so the exponent vector is recoverable
         from the product by unique factorisation. PAD occupies count slot
-        10 and is assigned no prime, so padding contributes nothing."""
-        val = _Z(1)
-        for v in range(10):
-            e = cnt.get(str(v), 0) * mult
-            if e:
-                val *= _Z(DIGIT_PRIMES[v]) ** e
-        return val
-
-
-    def cell_pow_product_mod(self, cnt, mult, mod):
-        """Same as cell_pow_product, but every power and the running product
-        are reduced mod `mod` via 3-argument pow() instead of computed
-        exactly. e2/e3/e5/e7 can reach the tens of thousands at dataset
+        10 and is assigned no prime, so padding contributes nothing.
+        e2/e3/e5/e7 can reach the tens of thousands at dataset
         scale -- pow(base, e, mod) is O(log e) modular multiplications
         (each bounded by `mod`'s size) instead of producing a base**e that
         is itself e*log10(base) decimal digits long."""
@@ -267,9 +258,12 @@ class Utils:
 
 
     def seal_row_mod(self, args):
-        """Modular counterpart of seal_row, for the ProcessPoolExecutor path.
-        Uses vsum_level_mod directly. Mirrors ms6's own row-seal choice (see
-        ms6.py)."""
+        """Modular row-seal for the ProcessPoolExecutor path -- a thin
+        wrapper so ex.map has a single picklable callable to dispatch,
+        folding one row via vsum_level_fold_mod (global_keys=True, matching
+        every other call site since the bug documented on
+        vsum_level_fold_mod's own docstring). Mirrors ms6's own row-seal
+        choice (see ms6.py)."""
         values, N, mod = args
         return int(self.vsum_level_fold_mod(N, mod, values, global_keys=True))
 
@@ -356,27 +350,14 @@ class Utils:
             start = end
 
         
-    def vsum(self, ds, b=1):
-        s = (sum(s) for s in reversed(ds))
-        carry = 0
-        m = 10**b
-        sr = []
-        for d in s:
-            carry,v = divmod(d+carry,m)
-            sr.insert(0,str(v).zfill(b))
-
-        while carry!=0:
-            carry,v = divmod(carry,m)
-            sr.insert(0,str(v).zfill(b))
-
-        return int(''.join(sr))
-
-    
-    def eval_level(self, N, values, max_idx=None):
-        """Groups per-position multiset products into per-idx buckets.
-        Driven through itertools.combinations_with_replacement (C speed)
-        plus one run-length pass per combo -- e.g. for L=40, N=3 that's
-        exactly 11480 Python-level iterations (one per combo), versus an
+    def eval_level_mod(self, N, values, mod, max_idx=None):
+        """Groups per-position multiset products into per-idx buckets,
+        every power and every combo product reduced mod `mod` so the
+        accumulated products never grow past `mod`'s size no matter how
+        large N or len(values) get. Driven through
+        itertools.combinations_with_replacement (C speed) plus one
+        run-length pass per combo -- e.g. for L=40, N=3 that's exactly
+        11480 Python-level iterations (one per combo), versus an
         unmemoized recursive enumeration revisiting O(L) partial-state
         frames per leaf (~123k calls for the same case).
 
@@ -386,53 +367,7 @@ class Utils:
         idx itself is cheap (small-int arithmetic only) so it's still
         derived for every combo; only the conditionally-large product is
         skipped. Not currently used by ms6/ps6/vs6 (which always want
-        every bucket), kept for callers that only need a low-idx slice.
-        """
-        L = len(values)
-        if L == 1:
-            if max_idx is not None and max_idx <= 0:
-                return []
-            return [[values[0] ** N]]
- 
-        powers = [[1] * (N + 1) for _ in range(L)]
-        for pos, v in enumerate(values):
-            row = powers[pos]
-            acc = 1
-            for c in range(1, N + 1):
-                acc *= v
-                row[c] = acc
- 
-        r = defaultdict(list)
-        for combo in combinations_with_replacement(range(L), N):
-            runs = []
-            prev = combo[0]
-            cnt = 1
-            for pos in combo[1:]:
-                if pos == prev:
-                    cnt += 1
-                else:
-                    runs.append((prev, cnt))
-                    prev = pos
-                    cnt = 1
-            runs.append((prev, cnt))
- 
-            idx = sum(p * c for p, c in runs)
-            if max_idx is not None and idx >= max_idx:
-                continue
-            val = 1
-            for p, c in runs:
-                val *= powers[p][c]
-            r[idx].append(val)
- 
-        return list(r.values())
-
-
-    def eval_level_mod(self, N, values, mod, max_idx=None):
-        """Modular counterpart of eval_level: every power and every combo
-        product is reduced mod `mod`, so the accumulated products never grow
-        past `mod`'s size no matter how large N or len(values) get. Same
-        idx grouping/order as eval_level (verified against it below), just
-        with modular instead of exact arithmetic."""
+        every bucket), kept for callers that only need a low-idx slice."""
         L = len(values)
         if L == 1:
             if max_idx is not None and max_idx <= 0:
@@ -472,61 +407,14 @@ class Utils:
         return list(r.values())
 
 
-    def mul_combinations(self, N, q, ps, vals):
-        L = len(vals)
-
-        # Precompute vals[pos]**count once per (pos, count), reused across all combos
-        powers = [[1] * (N + 1) for _ in range(L)]
-        for pos, v in enumerate(vals):
-            row = powers[pos]
-            acc = 1
-            for c in range(1, N + 1):
-                acc *= v
-                row[c] = acc
-
-        r = defaultdict(list)
-        for combo in combinations_with_replacement(range(L), N):
-            # combo is already sorted, so walk it once to get (position, run-length)
-            # pairs directly — no Counter, no dict.fromkeys, no extra map() passes.
-            idx = 0
-            val = 1
-            prev = combo[0]
-            cnt = 1
-            for pos in combo[1:]:
-                if pos == prev:
-                    cnt += 1
-                else:
-                    idx += prev * cnt
-                    val *= powers[prev][cnt]
-                    prev = pos
-                    cnt = 1
-            idx += prev * cnt
-            val *= powers[prev][cnt]
-
-            r[idx].append(val)
-
-        # vsum_level(1, ...) does the same positional (base-10^b) packing
-        # as self.vsum(), but via a balanced power-of-M doubling split
-        # (O(log n) big multiplications) instead of vsum()'s O(n) small
-        # divmod-by-10 divisions -- each of those is itself O(n) on an
-        # n-digit number, so O(n^2) total, which dominates once summed
-        # values reach the hundreds-of-thousands-of-digits scale ps6's
-        # oset-derived operands can produce.
-        bucket_sums = [
-            sum(pow(p * v, q) for p, v in zip(ps[idx], val_list))
-            for idx, val_list in r.items()
-        ]
-        return self.vsum_level(1, values=bucket_sums, b=1)
-
-
     def mul_combinations_mod(self, N, ps, vals, mod):
-        """Modular counterpart of mul_combinations: `ps` (from
-        eval_level_mod) and `vals` (from interlace_mod) are already
-        mod-reduced, and every product/power here is reduced mod `mod` too,
-        so nothing this function touches ever exceeds `mod`'s size. Same
-        combo enumeration/order as mul_combinations (so it lines up with
-        eval_level_mod's bucket order the same way mul_combinations lines
-        up with eval_level's).
+        """`ps` (from eval_level_mod) and `vals` (from interlace_mod) are
+        already mod-reduced, and every product/power here is reduced mod
+        `mod` too, so nothing this function touches ever exceeds `mod`'s
+        size. Same combo enumeration/order as eval_level_mod (positions
+        picked via itertools.combinations_with_replacement, walked once
+        per combo into (position, run-length) pairs), so its bucket order
+        lines up with eval_level_mod's own.
 
         KNOWN LEAK -- STRUCTURAL, and not something a modulus choice fixes:
         idx=0 and idx=N*(L-1) (choosing one column with full multiplicity
@@ -561,17 +449,21 @@ class Utils:
         anyway as a second, independent layer against any column this
         leak reaches that the edge padding did not already neutralize.
 
-        eval_level_rec_mod/mul_combinations_rec_mod (below) trade this for
-        a materially larger leak (every column invertible, not just a
-        handful from each edge) in exchange for making d=27 feasible --
-        moot in practice since neither is wired into ps6/vs6's default
-        path. Neither hashing nor multiplicatively blinding the per-column
-        values closes this leak without breaking correctness or being
-        just as invertible itself (see forge_ps.py) -- doing so for real
-        needs exponent-based (discrete-log) hiding, not this codebase's
-        "value as the base of a public power mod a prime" construction.
-        This smaller-leak combinatorial version is the default in ps6/
-        vs6; d=27 is unsupported by that tradeoff, not by oversight."""
+        A recursive, non-combinatorial enumeration could reach larger d
+        without the combinatorial blow-up this version pays for -- at the
+        cost of a materially larger leak (every column invertible, not
+        just a handful from each edge), since it would no longer collapse
+        most of the L^N combinations into shared, multi-term buckets the
+        way combinations_with_replacement does here. Not pursued: this
+        codebase only targets the small-d regime where the combinatorial
+        blow-up stays tractable. Neither hashing nor multiplicatively
+        blinding the per-column values closes this leak without breaking
+        correctness or being just as invertible itself -- doing so for
+        real needs exponent-based (discrete-log) hiding, not this
+        codebase's "value as the base of a public power mod a prime"
+        construction. This smaller-leak combinatorial version is the
+        default in ps6/vs6; d=27 is unsupported by that tradeoff, not by
+        oversight."""
         L = len(vals)
 
         powers = [[1] * (N + 1) for _ in range(L)]
@@ -671,64 +563,30 @@ class Utils:
         return dp[N]
 
 
-    def vsum_level_mod(self, N, mod, keys=None, values=range(1, 10), b=1):
-        """Modular counterpart of vsum_level: every weighted value, and
-        every DP/positional-sum accumulation, is reduced mod `mod`. The
-        N==1 fast path's "no-carry, assemble digits directly" shortcut
-        relies on base-M positional digits with *no* modular reduction
-        (that is precisely what lets it skip carry propagation) -- reducing
-        mod a prime that has nothing to do with base M would silently
-        corrupt that shortcut, so this always takes the explicit
-        weighted-sum-mod-`mod` path instead, for both N==1 and N>1. Same
-        (k, key) -> weight convention as vsum_level (weight = M**(C-k)),
-        just evaluated via pow(..., mod) instead of exact exponentiation."""
-        values = list(values)
-        keys = list(range(len(values))) if keys is None else list(keys)
-        pairs = [(k, v) for k, v in zip(keys, values) if v]
-        if not pairs or N <= 0:
-            return 0
-        M = 10 ** b
-        C = max(k for k, v in pairs)
-
-        if N == 1:
-            total = 0
-            for k, v in pairs:
-                total = (total + v * pow(M, C - k, mod)) % mod
-            return total
-
-        # Same h_N DP as vsum_level (increasing c => repeats allowed), with
-        # every weight and every accumulation reduced mod `mod`.
-        W = [(v * pow(M, C - k, mod)) % mod for k, v in pairs]
-        W.sort()
-        dp = [0] * (N + 1)
-        dp[0] = 1
-        for w in W:
-            for c in range(1, N + 1):
-                dp[c] = (dp[c] + dp[c - 1] * w) % mod
-        return dp[N]
-
-
     def h_vector_mod(self, N, mod, keys=None, values=range(1, 10), b=1, C=None):
-        """Same DP as vsum_level_mod, but returns the *whole* vector
-        [h_0, h_1, ..., h_N] instead of just h_N. h_0..h_{N-1} aren't waste
-        product -- they're exactly what's needed to correctly fold two
-        groups of values together (see fold_h_vector_mod): the complete
-        homogeneous symmetric polynomials of a disjoint union obey a Cauchy
-        product, h_k(A u B) = sum_{i=0}^{k} h_i(A) * h_{k-i}(B), which needs
-        every h_i up to k on both sides, not just the top one. Verified
-        against direct brute-force combinatorial enumeration (200/200
-        randomized trials, various group sizes and degrees).
+        """The modular h_N DP (same (k, key) -> weight convention as
+        vsum_level, weight = M**(C-k), evaluated via pow(..., mod) instead
+        of exact exponentiation, every accumulation reduced mod `mod`), but
+        returns the *whole* vector [h_0, h_1, ..., h_N] instead of just
+        h_N. h_0..h_{N-1} aren't waste product -- they're exactly what's
+        needed to correctly fold two groups of values together (see
+        fold_h_vector_mod): the complete homogeneous symmetric polynomials
+        of a disjoint union obey a Cauchy product, h_k(A u B) =
+        sum_{i=0}^{k} h_i(A) * h_{k-i}(B), which needs every h_i up to k on
+        both sides, not just the top one. Verified against direct
+        brute-force combinatorial enumeration (200/200 randomized trials,
+        various group sizes and degrees).
 
         `C`, when given, overrides the auto-derived max-key used for
-        positional weighting (vsum_level_mod always derives it as
-        max(keys) *within this one call*). That's the right thing when
-        values arrive pre-split into groups -- vsum_level_mod's positional
-        packing is defined relative to *one shared* C across the whole
-        dataset (e.g. chunk_size-1), not each group's own local max key;
-        passing the same global C into every group's h_vector_mod call is
-        what makes fold_h_vector_mod's result match a single vsum_level_mod
-        call over the unsplit values, provided the caller also passes
-        global_keys=True there -- see fold_h_vector_mod's docstring."""
+        positional weighting (otherwise derived as max(keys) *within this
+        one call*). That's the right thing when values arrive pre-split
+        into groups -- the positional packing is defined relative to *one
+        shared* C across the whole dataset (e.g. chunk_size-1), not each
+        group's own local max key; passing the same global C into every
+        group's h_vector_mod call is what makes fold_h_vector_mod's result
+        match a single h_vector_mod call's h_N over the unsplit values,
+        provided the caller also passes global_keys=True there -- see
+        fold_h_vector_mod's docstring."""
         values = list(values)
         keys = list(range(len(values))) if keys is None else list(keys)
         pairs = [(k, v) for k, v in zip(keys, values) if v]
@@ -742,7 +600,7 @@ class Utils:
         dp = [0] * (N + 1)
         dp[0] = 1
         for w in W:
-            for c in range(1, N + 1):          # ascending, same as vsum_level_mod -- repeats allowed (h_N, not e_N)
+            for c in range(1, N + 1):          # ascending, same as vsum_level -- repeats allowed (h_N, not e_N)
                 dp[c] = (dp[c] + dp[c - 1] * w) % mod
         return dp
 
@@ -772,32 +630,32 @@ class Utils:
 
         global_keys=False (default): each group is weighted by its own
         *local* positions (0..len(group)-1) using whatever b is passed
-        (default b=1, same as vsum_level_mod's default) -- pass b=0 (so
+        (default b=1, same default as h_vector_mod's own) -- pass b=0 (so
         M=10**0=1, weight collapses to the value itself regardless of
         position) if you want a truly plain, unordered-multiset h_N of the
         flattened values with no positional packing at all.
 
-        global_keys=True: reproduces vsum_level_mod's *global*, dataset-
-        position-weighted packing exactly (the convention ms6's row-seal
-        actually uses: weight = value * mod**(C - global_position)). Each
-        group is passed its true global keys and a shared global C
-        (= total_len - 1) via h_vector_mod's C= override, so every group's
-        weighting is normalized against the *same* reference point instead
-        of its own local max -- that shared reference is what makes the
-        folded result match a single vsum_level_mod call over the unsplit
-        sequence, not just "a" valid packing of the same values.
+        global_keys=True: reproduces the *global*, dataset-position-
+        weighted packing ms6's row-seal actually relies on (weight = value
+        * mod**(C - global_position), the same convention h_vector_mod/
+        vsum_level use). Each group is passed its true global keys and a
+        shared global C (= total_len - 1) via h_vector_mod's C= override,
+        so every group's weighting is normalized against the *same*
+        reference point instead of its own local max -- that shared
+        reference is what makes the folded result match taking h_N of the
+        whole flattened, unsplit sequence directly in one call, not just
+        "a" valid packing of the same values.
 
-        Verified against vsum_level_mod's own single-pass h_N -- bit-
-        identical, same b, same flattened value list -- PROVIDED the
-        caller passes global_keys=True; global_keys=False computes a
-        different (locally-weighted) value on purpose, per the two
-        paragraphs above, not a bug. A caller that wants
-        vsum_level_fold_mod's output to match vsum_level_mod's over the
-        same values MUST pass global_keys=True explicitly -- the default
-        is False, and every call site that omitted it while splitting a
-        real row/list into more than one group silently computed the
-        wrong scalar (found and fixed across ms6.core/vs6.core, see
-        ms6_vibe.md).
+        Verified bit-identical to h_vector_mod's own single-pass h_N over
+        the unsplit, flattened value list (same b) -- PROVIDED the caller
+        passes global_keys=True; global_keys=False computes a different
+        (locally-weighted) value on purpose, per the two paragraphs above,
+        not a bug. A caller that wants this function's output to match a
+        single unsplit h_N call over the same values MUST pass
+        global_keys=True explicitly -- the default is False, and every
+        call site that omitted it while splitting a real row/list into
+        more than one group silently computed the wrong scalar (found and
+        fixed across ms6.core/vs6.core, see ms6_vibe.md).
         """
         groups = [list(g) for g in group_values if list(g)]
         acc = None

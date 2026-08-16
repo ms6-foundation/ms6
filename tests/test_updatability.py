@@ -17,7 +17,7 @@ from tests.harness import (  # noqa: F401
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
     _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
     _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
-    ms6pkg, vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
+    vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
 )
 
@@ -110,7 +110,7 @@ def run(check):
           len(D0.vals) == 20 and D0.live_count == 19 and D0.vals[8] == base3[8]
           and D0.vals[19] == base3[19])
 
-    c_d, h_d, x_d, s_d, hm_d, perm_d, h1s_d, p_d = D0.opening()
+    _, h_d, _, s_d, hm_d, _, _, p_d = D0.opening()
     try:
         ps6({7}, h_d, hm_d, s_d, p_d)
         opened_dead = True
@@ -121,7 +121,7 @@ def run(check):
     # a proof issued before the delete must not verify against the new c
     D1 = Commitment(base3, d, q, chunk_size=u_cs, batch_size=u_bs,
                     s_mod=ut.generate_prime(256))
-    c_pre, h_pre, x_pre, s_pre, hm_pre, perm_pre, h1s_pre, p_pre = D1.opening()
+    _, h_pre, _, s_pre, hm_pre, _, _, p_pre = D1.opening()
     cl_pre = {6: D1.vals[6]}
     ps_pre = ps6(cl_pre.keys(), h_pre, [list(b) for b in hm_pre],
                  [list(r) for r in s_pre], p_pre)
