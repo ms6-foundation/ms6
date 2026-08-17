@@ -63,7 +63,7 @@ sys.set_int_max_str_digits(2_000_000)
 from ms6 import ms6, ps6, Commitment
 from vs6 import vs6
 
-CHUNK_SIZE, D, Q = 40, 3, 10
+CHUNK_SIZE, D, Q = 100, 3, 10
 BATCH_SIZE = 1_000
 N_RECORDS = 120_000
 N_REQUESTS = 10             # simulated screening requests to benchmark

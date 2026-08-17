@@ -8,7 +8,7 @@ import random as _random
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
-    _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
+    _seal_batch, _SealTree, _seal_hash, chunk_of, chunks, _column_perm,
     _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
     vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
@@ -28,19 +28,25 @@ def run(check):
 
     # Small fan-outs so the tree is several levels deep without needing
     # thousands of leaves, and so every group boundary gets crossed.
+    #
+    # Leaves must already be hashed (_seal_hash) -- real leaves are
+    # _seal_grid's own hashed h, or a touched batch's _vs6_batch
+    # reconstruction of one; _seal_rows/_seal_batch no longer hash their
+    # own input (see ms6.core._seal_rows's docstring), so a synthetic test
+    # leaf has to go through _seal_hash itself first, same as a real one.
     rng = _random.Random(11)
     tree_ok = True
     for sbs in (2, 3, 4):
-        leaves = [rng.randrange(1, 2 ** 160)]
+        leaves = [_seal_hash(rng.randrange(1, 2 ** 160))]
         T = _SealTree(leaves, 2, u_cs, d, q, DEFAULT_MOD, sbs=sbs)
         for _ in range(25):
-            nv = rng.randrange(1, 2 ** 160)
+            nv = _seal_hash(rng.randrange(1, 2 ** 160))
             T.append_leaf(nv)
             leaves.append(nv)
             tree_ok &= T.root == _seal_batch(leaves, u_cs, 2, d, q, DEFAULT_MOD,
                                              seal_batch_size=sbs)
             i = rng.randrange(len(leaves))
-            nv = rng.randrange(1, 2 ** 160)
+            nv = _seal_hash(rng.randrange(1, 2 ** 160))
             T.update_leaf(i, nv)
             leaves[i] = nv
             tree_ok &= T.root == _seal_batch(leaves, u_cs, 2, d, q, DEFAULT_MOD,

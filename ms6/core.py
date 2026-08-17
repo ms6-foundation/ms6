@@ -155,9 +155,9 @@ H2_TAG = "ms6-h2"
 # though nothing currently collides them.
 S_EDGE_TAG = "ms6-edge-s"
 
-# Domain-separation tag for _seal_rows (the seal-tree/batch-combining
-# fold's per-value hashing -- see _seal_rows/_seal_batch). Keeps this
-# hash input space separate from H1_TAG/H2_TAG/S_EDGE_TAG's.
+# Domain-separation tag for _seal_hash (the seal-tree/batch-combining
+# fold's per-value hashing -- see _seal_hash/_seal_rows/_seal_batch). Keeps
+# this hash input space separate from H1_TAG/H2_TAG/S_EDGE_TAG's.
 SEAL_TAG = "ms6-seal"
 
 
@@ -564,7 +564,18 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
     accH/accS and this recomputes the batch's h without rehashing any other
     item. _ms6_batch and Commitment.append/replace both go through here so
     an incrementally-updated batch is bit-identical to a freshly committed
-    one over the same items."""
+    one over the same items.
+
+    The returned `h` is domain_hash(SEAL_TAG:...) of the batch's own final
+    folded scalar, not that raw scalar itself -- the same standard of hash
+    _seal_rows used to apply one level up, when h_list (this function's own
+    output, batch by batch) later got folded into c via _seal_batch. Hashing
+    it here instead means _seal_rows/_seal_batch/_SealTree no longer hash
+    their own inputs (see _seal_rows), so every value that ever becomes a
+    tree leaf is hashed exactly once, at the point it's produced -- vs6's
+    _vs6_batch hashes its own per-batch reconstruction the same way, so a
+    touched batch's h lines up with an untouched batch's (copied straight
+    from h_list) either way."""
     H = [[ut.cell_product_mod(accH_cnt[i][j], q, mod) for j in range(chunk_size)]
          for i in range(len(accH_cnt))]
     S = [[(S0[i][j] * ut.cell_product_mod(accS_cnt[i][j], s_q, s_mod)) % s_mod for j in range(chunk_size)]
@@ -577,9 +588,10 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
-        H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
+        H = [pow(ut.vsum_level(1, values=H1), d, mod) for H1 in H]
 
-    return ut.vsum_level(1, values=H, b=chunk_size), S
+    h = ut.vsum_level_fold_mod(d, mod=mod, values=H, b=chunk_size, global_keys=True)
+    return _seal_hash(h), S
 
 
 def _ms6_batch(vals, chunk_size, d, q, s, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
@@ -739,10 +751,23 @@ def _seal_mod(bits):
     return ut.generate_prime(max(bits, DEFAULT_SEAL_MOD_BITS))
 
 
+def _seal_hash(val):
+    """The one place SEAL_TAG's domain_hash actually gets applied: every
+    value that ever becomes a leaf of a _seal_batch/_SealTree fold (a
+    batch's own h from _seal_grid, vs6.core._vs6_batch's reconstruction of
+    one, an intermediate group-seal one level of recursion down, or the
+    secret-salt reseal's own s0/s) is hashed exactly once, right here, at
+    the point it's produced -- not implicitly inside the fold itself (see
+    _seal_rows). Must stay textually identical to vs6.core's own copy, so
+    the two sides hash the same way."""
+    return ut.domain_hash(f"{SEAL_TAG}:{val}".encode())
+
+
 def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
-    """Folds a list of big-int h scalars into a single scalar: hash+chunk+
-    accumulate each value, then row-seal + combine, exactly like
-    _ms6_batch's own H does for one row -- just one level up.
+    """Folds a list of already-hashed (see _seal_hash) big-int-derived
+    digests into a single scalar: chunk+accumulate each value, then
+    row-seal + combine, exactly like _ms6_batch's own H does for one row --
+    just one level up.
 
     When `vals` is larger than seal_batch_size, it's folded hierarchically
     instead of in one Acc pass: split into seal_batch_size-sized groups,
@@ -751,11 +776,16 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFA
     repeating until a single pass at the top covers everything. Below the
     threshold this is exactly the original flat fold, so output for any
     `vals` that already fit in one pass is unchanged.
+
+    Each intermediate group-seal is re-hashed (_seal_hash) before it joins
+    the next level's `vals`, exactly like a fresh leaf would be -- only the
+    very last, top-level fold (this function's own final return) stays a
+    raw scalar, matching `c`/a batch's pre-_seal_grid-hash convention.
     """
     vals = list(vals)
     if len(vals) > seal_batch_size:
         vals = [
-            _seal_batch(vals[start:start + seal_batch_size], chunk_size, x, d, q, mod, seal_batch_size)
+            _seal_hash(_seal_batch(vals[start:start + seal_batch_size], chunk_size, x, d, q, mod, seal_batch_size))
             for start in range(0, len(vals), seal_batch_size)
         ]
         return _seal_batch(vals, chunk_size, x, d, q, mod, seal_batch_size)
@@ -782,22 +812,25 @@ def _seal_rows(val, chunk_of):
     Shared with _SealTree so a cached node can add or subtract exactly the
     rows the flat fold would have contributed.
 
-    Hashes val via Utils.domain_hash (SHAKE128), tagged with SEAL_TAG --
-    the same real cryptographic hash _hash_item uses for H1/H2, rather
-    than utils6.Utils.hash() (still used elsewhere in this file: hmax
-    sizing, the secret-salt reseal's own hmax-derived bound -- but NOT
-    here anymore). ut.hash() is a fixed, public, per-digit substitution
-    table with no collision-resistance argument behind it; this fold is
-    binding-relevant in exactly the same way the row-level H1/H2 check
-    is (vs6.vs6 recomputes it and asserts the result equals c, see its
-    own docstring), so it deserves the same standard of hash, not a
-    weaker one smuggled in one level up.
+    `val` must already be a Utils.domain_hash (SHAKE128) digest, tagged
+    with SEAL_TAG -- the same real cryptographic hash _hash_item uses for
+    H1/H2, rather than utils6.Utils.hash() (still used elsewhere in this
+    file: hmax sizing, the secret-salt reseal's own hmax-derived bound).
+    This fold is binding-relevant in exactly the same way the row-level
+    H1/H2 check is (vs6.vs6 recomputes it and asserts the result equals c,
+    see its own docstring), so it deserves the same standard of hash, not a
+    weaker one smuggled in one level up -- _seal_rows itself no longer
+    applies that hash, though: every value that reaches here is hashed
+    once, at the point it's produced (_seal_grid for a batch's own h,
+    vs6.core._vs6_batch for its reconstruction of one, or explicitly at the
+    secret-salt reseal's own call site in ms6()) so a value is never
+    re-hashed just because it passes through another fold.
 
     domain_hash's output is fixed-width (DOMAIN_HASH_DIGITS decimal
-    digits) regardless of val's own magnitude, unlike ut.hash()'s
-    input-magnitude-scaling output -- see SEAL_FOLD_ROWS below for what
-    that means for callers sizing `x`."""
-    return chunk_of(ut.domain_hash(f"{SEAL_TAG}:{val}".encode()))
+    digits) regardless of the original value's own magnitude, unlike
+    ut.hash()'s input-magnitude-scaling output -- see SEAL_FOLD_ROWS below
+    for what that means for callers sizing `x`."""
+    return chunk_of(val)
 
 
 # _seal_rows's output is now a FIXED DOMAIN_HASH_DIGITS-digit string
@@ -880,9 +913,13 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         # bit puts the prime at >= 2**hmax.bit_length() > hmax, always.
         seal_mod = _seal_mod(hmax.bit_length() + 1)
         s0 = gen.randrange(hmax)
-        # x sized to _seal_rows's actual (now fixed) output width, not
-        # s0's own decimal length -- see _seal_fold_rows.
-        s = _seal_batch([s0,s], chunk_size, _seal_fold_rows(chunk_size), d, q, mod=seal_mod)
+        # x sized to domain_hash's actual (fixed) output width, not s0's/
+        # s's own decimal length -- see _seal_fold_rows. _seal_rows no
+        # longer hashes its own input (see its docstring), so s0 and s are
+        # hashed explicitly here, the same standard of hash h_list's own
+        # entries get from _seal_grid.
+        s = _seal_batch([_seal_hash(s0), _seal_hash(s)],
+                         chunk_size, _seal_fold_rows(chunk_size), d, q, mod=seal_mod)
 
     starts = list(range(0, len(vals), batch_size))
 
@@ -949,7 +986,16 @@ class _SealTree:
 
     def build(self, leaves):
         """Full rebuild. Used on construction and whenever the tree's shape
-        changes (a new node or level appears, or x changes)."""
+        changes (a new node or level appears, or x changes).
+
+        leaves must already be hashed (_seal_hash) -- Commitment builds
+        this over self.h_list, whose entries are _seal_grid's own hashed
+        output. Every non-root level computed here gets _seal_hash applied
+        before it's stored, so it also reads back as an already-hashed
+        value the next time it's used as a group's own input (_counts_of,
+        or a later _propagate) -- exactly mirroring _seal_batch's own
+        recursive branch, which is what keeps root() equal to
+        _seal_batch(leaves, ...)."""
         self.levels = [list(leaves)]
         self.counts = [None]                    # level 0 are raw leaves, no counts
         level = self.levels[0]
@@ -957,10 +1003,12 @@ class _SealTree:
             groups = ([level] if len(level) <= self.sbs
                       else [level[i:i + self.sbs] for i in range(0, len(level), self.sbs)])
             cnts = [self._counts_of(g) for g in groups]
-            level = [_seal_from_counts(c, self.chunk_size, self.d, self.q, self.mod) for c in cnts]
+            raw = [_seal_from_counts(c, self.chunk_size, self.d, self.q, self.mod) for c in cnts]
+            is_root = len(raw) == 1
+            level = raw if is_root else [_seal_hash(v) for v in raw]
             self.levels.append(level)
             self.counts.append(cnts)
-            if len(level) == 1:
+            if is_root:
                 break
         return self.root
 
@@ -979,7 +1027,13 @@ class _SealTree:
 
     def _propagate(self, idx, old_v, new_v):
         """Walk one changed value up the tree, editing each ancestor's
-        counts in place. old_v=None means the child is newly present."""
+        counts in place. old_v=None means the child is newly present.
+
+        Same hash-unless-root rule as build(): every ancestor recomputed
+        here gets _seal_hash applied before it's stored/fed further up,
+        except the root itself -- k == len(self.levels)-1 identifies it
+        (fixed for the duration of one call; only build() ever changes the
+        tree's depth)."""
         for k in range(1, len(self.levels)):
             j = idx // self.sbs
             cnt = self.counts[k][j]
@@ -987,7 +1041,8 @@ class _SealTree:
                 _apply_rows(cnt, _seal_rows(old_v, self._chunk_of), -1)
             _apply_rows(cnt, _seal_rows(new_v, self._chunk_of), +1)
             old_v = self.levels[k][j]
-            new_v = _seal_from_counts(cnt, self.chunk_size, self.d, self.q, self.mod)
+            raw = _seal_from_counts(cnt, self.chunk_size, self.d, self.q, self.mod)
+            new_v = raw if k == len(self.levels) - 1 else _seal_hash(raw)
             self.levels[k][j] = new_v
             idx = j
         return self.root

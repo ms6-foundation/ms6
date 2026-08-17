@@ -10,7 +10,7 @@ import random as _random
 from tests.harness import (  # noqa: F401
     ms6, ps6, Commitment, vs6, ParamMismatch,
     make_params, unpack_params, PARAM_KEYS, VS6_PARAM_KEYS,
-    _seal_batch, _SealTree, chunk_of, chunks, _column_perm,
+    _seal_batch, _SealTree, _seal_hash, chunk_of, chunks, _column_perm,
     _permute_row, _get_batch_ids, DEFAULT_MOD, ut, gen, u, M, V,
     vs6pkg, D, Q, U_CS, U_BS, mk, proves, proves_with_expect,
     rebuilt, standalone,
@@ -47,7 +47,9 @@ def run(check):
     idxs = [prng.randrange(0, 10000) for _ in range(50)]
     seal_cases = {}
     for n_, sbs_ in ((1, 1000), (5, 1000), (30, 4), (1001, 1000)):
-        lv = [ri(200) for _ in range(n_)]
+        # _seal_batch no longer hashes its own input (see ms6.core._seal_rows's
+        # docstring) -- leaves must already be hashed, same as a real one.
+        lv = [_seal_hash(ri(200)) for _ in range(n_)]
         seal_cases[f"_seal_batch(n={n_},sbs={sbs_})"] = (
             _seal_batch(lv, 12, 2, 3, 10, mod_, sbs_), _V._seal_batch(lv, 12, 2, 3, 10, mod_, sbs_))
     pp = make_params(3, 10, 12, 5, mod_, 7)

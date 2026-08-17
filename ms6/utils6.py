@@ -1,5 +1,6 @@
 import sys
 import hashlib
+import math
 import secrets
 from collections import Counter, defaultdict
 from itertools import combinations_with_replacement
@@ -259,14 +260,14 @@ class Utils:
 
     def seal_row_mod(self, args):
         """Modular row-seal for the ProcessPoolExecutor path -- a thin
-        wrapper so ex.map has a single picklable callable to dispatch,
-        folding one row via vsum_level_fold_mod (global_keys=True, matching
-        every other call site since the bug documented on
-        vsum_level_fold_mod's own docstring). Mirrors ms6's own row-seal
-        choice (see ms6.py)."""
+        wrapper so ex.map has a single picklable callable to dispatch.
+        Folds one row as pow(vsum_level(1, values=values), N, mod), the
+        same (sum)^N construction ms6.core._seal_grid's own sequential
+        branch uses -- must stay in lockstep with it, or a commit built
+        with workers>1 diverges from one built with workers=1 (see
+        tests/test_sizing.py's row-fold parallelism check)."""
         values, N, mod = args
-        return int(self.vsum_level_fold_mod(N, mod, values, global_keys=True))
-
+        return pow(self.vsum_level(1, values=values), N, mod)
 
     def _prep(self, p):
         P = [self._powset()[v][p - 1] for v in range(10)]
@@ -350,63 +351,6 @@ class Utils:
             start = end
 
         
-    def eval_level_mod(self, N, values, mod, max_idx=None):
-        """Groups per-position multiset products into per-idx buckets,
-        every power and every combo product reduced mod `mod` so the
-        accumulated products never grow past `mod`'s size no matter how
-        large N or len(values) get. Driven through
-        itertools.combinations_with_replacement (C speed) plus one
-        run-length pass per combo -- e.g. for L=40, N=3 that's exactly
-        11480 Python-level iterations (one per combo), versus an
-        unmemoized recursive enumeration revisiting O(L) partial-state
-        frames per leaf (~123k calls for the same case).
-
-        `max_idx`, when given, skips the (often large) value multiplication
-        for any combo whose idx would land at or beyond it -- safe whenever
-        the caller only ever consumes buckets 0..max_idx-1 of the result.
-        idx itself is cheap (small-int arithmetic only) so it's still
-        derived for every combo; only the conditionally-large product is
-        skipped. Not currently used by ms6/ps6/vs6 (which always want
-        every bucket), kept for callers that only need a low-idx slice."""
-        L = len(values)
-        if L == 1:
-            if max_idx is not None and max_idx <= 0:
-                return []
-            return [[pow(values[0], N, mod)]]
-
-        powers = [[1] * (N + 1) for _ in range(L)]
-        for pos, v in enumerate(values):
-            row = powers[pos]
-            acc = 1
-            for c in range(1, N + 1):
-                acc = (acc * v) % mod
-                row[c] = acc
-
-        r = defaultdict(list)
-        for combo in combinations_with_replacement(range(L), N):
-            runs = []
-            prev = combo[0]
-            cnt = 1
-            for pos in combo[1:]:
-                if pos == prev:
-                    cnt += 1
-                else:
-                    runs.append((prev, cnt))
-                    prev = pos
-                    cnt = 1
-            runs.append((prev, cnt))
-
-            idx = sum(p * c for p, c in runs)
-            if max_idx is not None and idx >= max_idx:
-                continue
-            val = 1
-            for p, c in runs:
-                val = (val * powers[p][c]) % mod
-            r[idx].append(val)
-
-        return list(r.values())
-
-
     def mul_combinations_mod(self, N, ps, vals, mod):
         """`ps` (from eval_level_mod) and `vals` (from interlace_mod) are
         already mod-reduced, and every product/power here is reduced mod
@@ -500,6 +444,87 @@ class Utils:
         # vsum_level_fold_mod, see ms6.py's row-seal for the same substitution/rationale.
         return self.vsum_level_fold_mod(1, mod, bucket_sums, b=1, global_keys=True)
 
+
+    def multinomial(self, P, deg):
+        """deg! / prod(p! for p in P) -- gen.py's fast_coeff, without the cache."""
+        return math.prod(range(P[0] + 1, deg + 1)) // math.prod(
+            math.factorial(p) for p in P[1:])
+
+
+    def eval_level_mod(self, N, values, mod, max_idx=None):
+        """Groups per-position multiset products into per-idx buckets,
+        every power and every combo product reduced mod `mod` so the
+        accumulated products never grow past `mod`'s size no matter how
+        large N or len(values) get. Driven through
+        itertools.combinations_with_replacement (C speed) plus one
+        run-length pass per combo -- e.g. for L=40, N=3 that's exactly
+        11480 Python-level iterations (one per combo), versus an
+        unmemoized recursive enumeration revisiting O(L) partial-state
+        frames per leaf (~123k calls for the same case).
+
+        Each combo's product is scaled by its own public multinomial
+        coefficient (self.multinomial, from the combo's run-length shape)
+        before landing in its idx bucket -- so the buckets this returns sum
+        to (sum_j values[j])**N, not h_N(values) the way an unweighted
+        enumeration would. Used this way by ms6.core._finish_ps6/ps6, paired
+        against mul_combinations_mod's own (unweighted) enumeration on the
+        verifier side -- the multinomial theorem's twisted-bilinear form,
+        (sum_j x_j*y_j)**N = sum_C ce(C)*monomial_x(C)*monomial_y(C), makes
+        that pairing reconstruct the same total either way, as long as the
+        weight lands on exactly one side. See _seal_grid's own row-fold
+        (pow(vsum_level(1,...), N, mod)) for the matching commit-time side
+        of this identity.
+
+        The multinomial weight is 1 at idx=0 and idx=N*(L-1) (each realized
+        by exactly one combo, all N copies at one position) -- so it does
+        not change mul_combinations_mod's own KNOWN LEAK discussion (above,
+        in this file), only the buckets in between.
+
+        `max_idx`, when given, skips the (often large) value multiplication
+        for any combo whose idx would land at or beyond it -- safe whenever
+        the caller only ever consumes buckets 0..max_idx-1 of the result.
+        idx itself is cheap (small-int arithmetic only) so it's still
+        derived for every combo; only the conditionally-large product is
+        skipped."""
+        L = len(values)
+        if L == 1:
+            if max_idx is not None and max_idx <= 0:
+                return []
+            return [[pow(values[0], N, mod)]]
+
+        powers = [[1] * (N + 1) for _ in range(L)]
+        for pos, v in enumerate(values):
+            row = powers[pos]
+            acc = 1
+            for c in range(1, N + 1):
+                acc = (acc * v) % mod
+                row[c] = acc
+
+        r1 = defaultdict(list)
+        for combo in combinations_with_replacement(range(L), N):
+            runs = []
+            prev = combo[0]
+            cnt = 1
+            for pos in combo[1:]:
+                if pos == prev:
+                    cnt += 1
+                else:
+                    runs.append((prev, cnt))
+                    prev = pos
+                    cnt = 1
+            runs.append((prev, cnt))
+
+            idx = sum(p * c for p, c in runs)
+            if max_idx is not None and idx >= max_idx:
+                continue
+            val = 1
+            for p, c in runs:
+                val = (val * powers[p][c]) % mod
+            ce = self.multinomial([c for p, c in runs], N) % mod
+            r1[idx].append((val * ce) % mod)
+
+        return list(r1.values())
+    
 
     def vsum_level(self, N, keys=None, values=range(1, 10), b=1):
         """Fast path: the vsum integer, without building any key-indexed table."""
@@ -679,7 +704,7 @@ class Utils:
         return acc
 
 
-    def vsum_level_fold_mod(self, k, mod, values, chunk_size=100, b=1, global_keys=False):
+    def vsum_level_fold_mod(self, k, mod, values, chunk_size=20, b=1, global_keys=False):
         """DP + modular-arithmetic counterpart of fold6.py's vsum_level_fold:
         same hierarchical idea (fold a large flat `values` list down via
         chunk_size-sized groups, degree k held fixed throughout), but every

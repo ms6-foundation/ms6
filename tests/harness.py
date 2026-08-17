@@ -18,7 +18,7 @@ from vs6 import vs6, ParamMismatch, PARAM_KEYS as VS6_PARAM_KEYS  # noqa: E402
 ms6, ps6, Commitment = M.ms6, M.ps6, M.Commitment
 QueryGovernor, QueryPolicyViolation, ps6_governed = M.QueryGovernor, M.QueryPolicyViolation, M.ps6_governed
 make_params, unpack_params, PARAM_KEYS = M.make_params, M.unpack_params, M.PARAM_KEYS
-_seal_batch, _SealTree = M._seal_batch, M._SealTree
+_seal_batch, _SealTree, _seal_hash = M._seal_batch, M._SealTree, M._seal_hash
 chunk_of, chunks, _column_perm = M.chunk_of, M.chunks, M._column_perm
 _permute_row, _get_batch_ids = M._permute_row, M._get_batch_ids
 DEFAULT_MOD, ut, gen = M.DEFAULT_MOD, M.ut, M.gen

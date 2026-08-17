@@ -73,9 +73,11 @@ ut = u.Utils()
 # here (see this module's own docstring).
 H1_TAG = "ms6-h1"
 
-# Must stay textually identical to ms6.core.SEAL_TAG -- _seal_batch below
-# uses this to independently recompute the same seal-tree/batch-combining
-# fold ms6.core._seal_rows uses, so the two sides' `c` match.
+# Must stay textually identical to ms6.core.SEAL_TAG -- _seal_hash below
+# uses this to independently recompute the same per-value hash
+# ms6.core._seal_hash applies (at _seal_grid/_vs6_batch/the reseal call
+# site/each intermediate _seal_batch group-seal), so the two sides' `c`
+# match.
 SEAL_TAG = "ms6-seal"
 
 
@@ -242,28 +244,35 @@ def interlace_mod(hm, x, chunk_size, k1, mod, perm=None, rand_edge_size=0):
     return H
 
 
-def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
-    """Folds a list of big-int h scalars into a single scalar: hash+chunk+
-    accumulate each value, then row-seal + combine -- identical logic to
-    ms6.py's own _seal_batch (duplicated here, not imported, per this
-    module's zero-prover-dependency goal). ms6() uses this to fold
-    per-batch h's into one commitment c; vs6() re-runs the exact same fold
-    independently over the reconstructed per-batch h's and checks the
-    result equals c.
+def _seal_hash(val):
+    """Must stay textually identical to ms6.core's own copy -- see that
+    module's docstring for the full rationale (every _seal_batch/_SealTree
+    leaf, ms6-side or vs6-side, is hashed exactly once, at the point it's
+    produced, not implicitly inside the fold itself)."""
+    return ut.domain_hash(f"{SEAL_TAG}:{val}".encode())
 
-    Each value is hashed via Utils.domain_hash (SHAKE128), tagged with
-    SEAL_TAG -- must stay in lockstep with ms6.core._seal_rows's own copy,
-    or the two sides' folds diverge and no proof verifies.
+
+def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE):
+    """Folds a list of already-hashed (see _seal_hash) big-int-derived
+    digests into a single scalar: chunk+accumulate each value, then
+    row-seal + combine -- identical logic to ms6.py's own _seal_batch
+    (duplicated here, not imported, per this module's zero-prover-
+    dependency goal). ms6() uses this to fold per-batch h's into one
+    commitment c; vs6() re-runs the exact same fold independently over the
+    reconstructed per-batch h's (each hashed by _vs6_batch the same way
+    ms6.core._seal_grid hashes its own) and checks the result equals c.
 
     When `vals` is larger than seal_batch_size, it's folded hierarchically
     instead of in one Acc pass -- see ms6.py's _seal_batch docstring for the
-    scheme. Must stay in lockstep with ms6.py's copy: the same seal_batch_size
-    partitioning must be used on both sides for the final fold to match.
+    scheme, including why each intermediate group-seal is re-hashed before
+    joining the next level's `vals`. Must stay in lockstep with ms6.py's
+    copy: the same seal_batch_size partitioning and hash-unless-top-level
+    rule must be used on both sides for the final fold to match.
     """
     vals = list(vals)
     if len(vals) > seal_batch_size:
         vals = [
-            _seal_batch(vals[start:start + seal_batch_size], chunk_size, x, d, q, mod, seal_batch_size)
+            _seal_hash(_seal_batch(vals[start:start + seal_batch_size], chunk_size, x, d, q, mod, seal_batch_size))
             for start in range(0, len(vals), seal_batch_size)
         ]
         return _seal_batch(vals, chunk_size, x, d, q, mod, seal_batch_size)
@@ -272,8 +281,7 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFA
     accH = u.Acc(x, chunk_size)
     chunk_of = chunks(x, chunk_size)
     for t, val in enumerate(vals):
-        hm1 = chunk_of(ut.domain_hash(f"{SEAL_TAG}:{val}".encode()))
-        accH.add(hm1)
+        accH.add(chunk_of(val))
         if (t & (FLUSH - 1)) == FLUSH - 1:
             accH.flush()
     accH.flush()
@@ -312,6 +320,12 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     h1_salt_list[b], see ms6.core._h1_salt) -- without it a claimed
     item's H1 is recomputed against the wrong (default, unsalted) input
     and never matches what ms6 actually committed.
+
+    The returned value is hashed (_seal_hash) before it comes back, the
+    same way ms6.core._seal_grid hashes a batch's own h -- so a touched
+    batch's reconstruction here lines up with an untouched batch's h_list
+    entry (copied straight through from ms6, already hashed) once vs6()
+    folds every batch's h together via _seal_batch below.
     """
 
     # interlace's exponent must match ps6/ms6's q, so M[j] = prod over
@@ -342,7 +356,8 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     else:
         H = [ut.mul_combinations_mod(d, ps[i], M[i], mod) for i in range(len(ps))]
 
-    return ut.vsum_level(1, values=H, b=chunk_size)
+    h = ut.vsum_level_fold_mod(d, mod=mod, values=H, b=chunk_size, global_keys=True)
+    return _seal_hash(h)
 
 
 def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=DEFAULT_WORKERS, expect=None):

@@ -273,6 +273,7 @@ class Utils:
                 dp[c] += dp[c - 1] * w
         return dp[N]
 
+
     def h_vector_mod(self, N, mod, keys=None, values=range(1, 10), b=1, C=None):
         """The modular h_N DP (same (k, key) -> weight convention as
         vsum_level, weight = M**(C-k), evaluated via pow(..., mod) instead
@@ -332,7 +333,7 @@ class Utils:
             return [1] + [0] * N
         return acc
 
-    def vsum_level_fold_mod(self, k, mod, values, chunk_size=100, b=1, global_keys=False):
+    def vsum_level_fold_mod(self, k, mod, values, chunk_size=20, b=1, global_keys=False):
         """Thin wrapper around fold_h_vector_mod -- see ms6/utils6.py's copy for
         the full rationale. Reached only via mul_combinations_mod
         (global_keys=True), to seal its bucket_sums into a single scalar."""

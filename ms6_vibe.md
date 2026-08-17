@@ -2717,3 +2717,305 @@ session's established practice is to re-run rather than assume).
 
 Not yet committed — pending confirmation before touching git, same pattern
 as entry 55.
+
+## 63. Comparative research: op:multiquery in other vector commitment schemes, and whether value-only transforms can fix it
+
+**Request** — "Any other vector commitment scheme had similar issues
+related to op:multiquery and how they resolved it," then "can we apply any
+of these patterns directly to the inner column values to achieve genuine
+hiding? and not to change the protocol how we construct the commitment or
+the proofs (that means only performing some operation on inner column
+values)."
+
+Pure research, no code changes. Surveyed hiding vector commitments and
+selective-opening-security literature (Pedersen/KZG-style hiding via a
+per-commitment random blinding factor added at commit time, not
+re-randomized per query) and reported how those schemes structurally avoid
+this codebase's ratio-cancellation issue: their blinding is additive/
+exponent-based and independent per commitment, not a fixed multiplicative
+per-cell grid reused across every query the way `S[r][j]` is here.
+
+Second question then asked, narrowly: holding the protocol's construction
+fixed (same commit/prove/verify shape), can a value-only transform on the
+inner column values alone close the gap. Answered no, proven two ways:
+analytically (the ratio-cancellation attack only uses that `row[j]` is a
+per-item *multiplicatively aggregated* function of column j across the
+oset — true for any one-way encoding of the digit, not specific to
+DIGIT_PRIMES) and empirically, via an isolated probe script (not wired
+into the live protocol) trying an alternate hash-derived encoding and
+confirming the same ratio still cancels. Also flagged, independent of the
+encoding question, that a 10-digit message space is brute-forceable
+regardless of one-wayness.
+
+## 64. Alternatives to modular root-extraction hardening (research only)
+
+**Request** — "what are alternatives to the modular reduction that will
+prevent the root extraction?"
+
+Research only, no code changes. Surveyed RSA-composite groups of unknown
+order, class groups, elliptic-curve groups, KZG-style pairings, and
+lattice-based constructions as alternatives to "value as the base of a
+public power mod a prime" for closing `mul_combinations_mod`'s KNOWN LEAK
+root-extraction path. Caveat given up front and reiterated: none of these
+touch op:multiquery or the 10-digit brute-force problem (orthogonal
+issues), and this codebase's edge-column padding already closes the
+specific leak being discussed for free, at the data level, regardless of
+which of these the modulus were swapped for.
+
+## 65. Externally-modified working tree, twice: six protocol bugs found and reverted to HEAD, then the same `eval_level_mod` swap re-diagnosed from scratch
+
+**Request** — "Please run all tests for the protocol level changes to the
+ms6 project and fix," then, after the crash reappeared following an
+external re-edit, "replace eval_level_mod with eval_level_mod2 in the
+_finish_ps6 and retest," "Yes, fix the list() wrap and see the deeper
+mismatch and match the mul_combinations_mod grouping similar to the
+eval_level_mod2," "Please test the protocol level changes of ms6," "yes,
+fix identity()'s list() wrap," "yes, trace down the bug."
+
+The working tree had changed outside this session's own edits — flagged
+explicitly rather than assumed, each time it happened (four separate
+occasions across this stretch). First pass: ran the suite, found and fixed
+six concrete bugs by reverting each to what `git diff` showed against HEAD
+(`_seal_grid`'s row-fold and return, `vs6/core.py`'s `_vs6_batch` tail,
+`vs6/utils6.py`'s `mul_combinations_mod` tail, `ms6/utils6.py`'s
+`seal_row_mod`, `ms6/core.py`'s `_finish_ps6`) — confirmed each revert
+matched HEAD exactly, then 87/87.
+
+The tree was then externally re-edited to reintroduce a swap of
+`eval_level_mod` for a new `eval_level_mod2` inside `_finish_ps6` — first
+as a bare, un-imported reference (`NameError`), then (after the file
+changed again) as a real function built on `poly_pow`/`poly_pow_fast`
+(Miller-recurrence polynomial-power coefficients) instead of the
+combinatorial bucket enumeration. Traced this specific approach's
+incompatibility with `mul_combinations_mod`'s bilinear pairing via an
+isolated `/tmp/verify_pairing.py` script (not touching live code): 14/20
+random-trial mismatches against the true target. Reported the finding
+rather than reverting or patching further, since the file changed again
+before a decision was needed.
+
+Next external version replaced that with an `identity()`/`p_set()`/
+`multinomial()`/`partition_counts()`/`deep_prod()`-based
+`eval_level_mod2`, crashing on a missing `list()` wrap (`dict_values` not
+subscriptable) in two places in turn (`eval_level_mod2` itself, then
+`identity()`). Fixed both, retested, hit the same class of deeper
+`assert h==c` mismatch each time. Traced the second one to its root cause
+with a concrete numeric proof (`/tmp/trace_identity.py`): `identity()`'s
+buckets are multinomial coefficients (from the combo's run-length
+partition shape), not an all-1s identity element the way the name
+suggested, and `eval_level_mod2` was multiplying `h_d`'s correct
+combinatorial structure by these coefficients via `deep_prod`, turning the
+result into the multinomial expansion of `(sum)^d` rather than `h_d`.
+
+### Verified
+
+`python3 -m tests` run after every fix in this stretch; 87/87 at each
+stable checkpoint, explicit mismatch (`assert h==c` failing) reported
+verbatim at each broken one rather than papered over.
+
+## 66. The multinomial weighting turns out to be intentional: inlined into `eval_level_mod2`, and the full externally-modified construction verified self-consistent
+
+**Request** — "eval_level_mod2 is same eval_level_mod but multiplying each
+term with a multinomial coefficient from the multinomial(P, deg) so
+instead of using deep_prod can we multiply the multinomial coefficients in
+the eval_level_mod2."
+
+This reframed entry 65's "bug" as intentional: the multinomial weighting
+was meant to be there, just applied more directly than the
+`identity()`+`deep_prod()` two-pass approach could manage correctly.
+Inlined it: `ce = self.multinomial([c for p, c in runs], N) % mod`
+computed directly inside `eval_level_mod2`'s own
+`combinations_with_replacement` loop and multiplied into each bucket
+entry, removing the separate `identity()`/`deep_prod()` pass entirely. A
+side-by-side script confirmed this differs from the old `deep_prod`
+version on multi-partition-shape buckets and traced why: `identity()`'s
+buckets are ordered by partition-shape DP, not by the natural combo order
+`eval_level_mod2`'s own loop produces, so the old version was pairing the
+wrong coefficient against the wrong term for any bucket spanning more than
+one partition shape — a second, independent bug beyond entry 65's
+"wrong quantity" diagnosis. The inline version sidesteps this by
+construction (each combo computes and applies its own `ce` in the same
+loop iteration, no separate ordering to line up).
+
+Ran the real suite expecting a weighted-prover/unweighted-verifier
+mismatch per entry 65's own analysis — got 87/87 instead. Investigating
+why turned up that `_seal_grid`'s row-fold (`pow(vsum_level(1,
+values=H1),d,mod)`, i.e. `(sum)^d`) and its batch-level return
+(`vsum_level_fold_mod`, `h_d`-style), plus `vs6/core.py`'s `_vs6_batch`
+tail (also switched to `vsum_level_fold_mod`), had ALL been externally
+re-applied to their entry-65-Phase-5-reverted-away state, and that this
+combination is not broken but a second, genuinely self-consistent
+construction: by the multinomial theorem's twisted-bilinear identity,
+`(sum_j x_j*y_j)^d = sum_C ce(C)*monomial_x(C)*monomial_y(C)` for any
+combo weighting `ce`, as long as it's applied on exactly one side of the
+pairing — which is exactly what weighted `eval_level_mod2` (prover) paired
+against unweighted `mul_combinations_mod` (verifier) computes. Confirmed
+stable across 3 consecutive full runs before reporting it, since the
+result was surprising enough to warrant re-verification rather than
+trusting one green run.
+
+A more careful follow-up derivation (entry 68, prompted by the next
+request) later corrected the specific identity claimed here: `vsum_level`
+with keys defaulted from `range(len(values))` builds a base-10
+*positional* encoding (`sum_k values[k] * 10**(C-k)`), not a plain sum —
+so the row identity that actually holds is the positionally-weighted
+version of the multinomial theorem above, not the plain-sum form as first
+stated to the user. The self-consistency conclusion itself was unaffected
+and was independently re-verified against the live functions once the
+error was caught.
+
+### Verified
+
+`python3 -m tests`, 3 consecutive full runs, 87/87 each time, including
+every adversarial/soundness/leak check.
+
+## 67. Dead-code removal (round 2), a real parallel-path bug found while re-deriving the row identity, and a binding check before touching op:multiquery
+
+**Request** — "yes, please remove the dead code and also verify and
+confirm the binding hold true then we will work the fix for the
+op:multiquery ratio cancellation."
+
+Removed `identity`, `p_set`, `partition_counts`, `deep_prod`, `poly_pow`,
+`poly_pow_fast`, `_check_mod`, `_miller_usable`, and an unused new
+`vsum_level_mod` (Horner-fold) from both `ms6/utils6.py` and
+`vs6/utils6.py` — all confirmed, by grep across the whole tree (not just
+the live pipeline), to have zero remaining callers once entry 66's inline
+refactor stopped needing `identity()`/`deep_prod()`. Kept `multinomial`,
+which the inline refactor does call. Left the original (now-superseded)
+`eval_level_mod` function itself in place at this point, deliberately —
+flagged as a judgment call rather than deleted unilaterally, since it's
+cross-referenced from docstrings/comments throughout the tree as the
+canonical algorithm description (resolved properly in entry 70).
+
+While re-deriving the exact row-level identity from scratch (to answer
+the binding question rigorously rather than re-assert entry 66's
+narrative), found that `ms6/utils6.py`'s `seal_row_mod` — the
+`workers>1` row-fold branch inside `_seal_grid`, exercised only when a
+single batch spans more than one row AND `workers>1` reaches `_seal_grid`
+directly — computed `pow(vsum_level(N, values), N, mod)`, while the
+sequential branch two lines away computes `pow(vsum_level(1, values), d,
+mod)`: different quantities (`h_N(values)^N` vs. `(sum(values))^d`, per
+the corrected identity below). No existing test caught this because
+`ms6()`'s own batch-level parallelism always pins `workers=1` per batch to
+avoid nesting process pools, and every test's `workers>1` case has multiple
+batches — so the row-level branch was structurally unreachable from the
+whole suite. Confirmed the divergence with an isolated probe, fixed
+`seal_row_mod` to match the sequential branch, and added a permanent
+regression test to `tests/test_sizing.py` (single batch, 5 rows,
+`workers=1` vs `4`, plus a round-trip verify) — confirmed it fails without
+the fix (reverted it temporarily to check) and passes with it.
+
+For the binding check itself: a probe against the live functions (not
+hand-derivation) showed the row-level identity that actually holds is
+`committer_h = pow(vsum_level(1, values=full_row), d, mod)`, where
+`vsum_level(1, ...)` is a base-10 *positional* encoding of the row
+(`sum_k full_row[k] * 10**(C-k)`), not the plain sum entry 66 had stated —
+verified this precisely by splitting a random row into oset/claimed
+contributions and confirming the verifier's `eval_level_mod2` +
+`mul_combinations_mod` pairing reconstructs the committer's value exactly,
+bit for bit. For the security argument: proved analytically and confirmed
+numerically across several `(d, L)` that the multinomial weight is exactly
+1 at both of `mul_combinations_mod`'s documented KNOWN LEAK edge buckets
+(idx=0 and idx=N*(L-1), each realized by exactly one combo) — so the
+weighting doesn't touch that leak's exposure at all, only the buckets in
+between. Ran the existing adversarial/leak suites (unchanged outcome, all
+still catching every forgery) plus a fresh 2000-trial single-column-tamper
+stress test directly against the new pairing (not through the higher-level
+test suite) — zero collisions. Reported this as heuristic/empirical
+evidence matching this project's existing standard (no formal binding
+reduction existed before this construction either), not a new proof.
+
+### Verified
+
+pyflakes/vulture clean on the touched files. `python3 -m tests`: 90/90
+(87 original + 3 new sizing checks), including a deliberately-reverted
+re-run of the `seal_row_mod` fix to confirm the new regression test
+actually catches the bug it's named for.
+
+## 68. `eval_level_mod2` renamed to `eval_level_mod` (old version deleted); `SEAL_TAG` domain-hashing moved out of `_seal_rows` and into `_seal_grid`/`_vs6_batch`/`_seal_hash`
+
+**Request** — "rename eval_level_mod2 to eval_level_mod and remove the
+dead eval_level_mod. Hash the h_list using the domain hash in the
+_seal_grid and remove the hashing of the values from the _seal_rows."
+
+**Rename**: deleted the original unweighted `eval_level_mod`
+(`ms6/utils6.py`), renamed `eval_level_mod2` to `eval_level_mod`, updated
+`_finish_ps6`'s call sites, and rewrote the function's own docstring to
+describe what it actually computes now (multinomial-weighted, sums to
+`(sum values)**N` via the twisted-bilinear multinomial identity, paired
+against `mul_combinations_mod`'s unweighted enumeration) rather than the
+stale "not currently used" note left over from when it was still
+`eval_level_mod2`. Confirmed by grep across the whole tree that every
+other reference to the name (`mul_combinations_mod`'s own docstring,
+several module-level comments, `tests/test_leak.py`) was already generic
+enough to resolve correctly post-rename with no further edits needed.
+
+**Domain-hash relocation**: before touching anything, read `_seal_grid`,
+`_seal_rows`, `_seal_batch`, and `_SealTree` fully rather than assuming
+their shape from memory, and surfaced a real ambiguity to the user before
+implementing — `_seal_rows`'s `domain_hash` call is shared by two
+unrelated callers (folding `h_list` into `c`, and the secret-salt reseal's
+`_seal_batch([s0, s], ...)`) — asked whether the reseal path should keep
+its own hash, and where exactly `_seal_grid` should apply the new one; both
+answered with the recommended options (keep the reseal hash via a separate
+call site; hash `_seal_grid`'s final returned scalar).
+
+Implemented as a new `_seal_hash(val)` helper (`ut.domain_hash(f"{SEAL_TAG}:{val}".encode())`,
+duplicated textually in `vs6/core.py` matching this codebase's existing
+ms6/vs6-duplication convention) called at every place that ever produces
+what becomes a `_seal_batch`/`_SealTree` leaf: `_seal_grid`'s final
+returned `h`; `vs6/core.py`'s `_vs6_batch`'s own final returned `h`
+(needed for symmetry — a touched batch's reconstruction must land in the
+same hashed form an untouched batch's copied-through `h_list` entry
+already has, or the top-level fold's two kinds of batch never agree); the
+reseal call site's `s0`/`s`. `_seal_rows` itself no longer hashes — it
+just chunks an already-hashed value.
+
+A less obvious piece: `_seal_batch`'s own recursive branch (triggered only
+when a commitment has more batches than `seal_batch_size`, default 1000)
+folds intermediate group-seals through another `_seal_batch` pass.
+Before this change, every value hitting `_seal_rows` was hashed
+automatically regardless of whether it was a genuine leaf or an
+intermediate recursive result; with hashing moved to the leaf-production
+sites, those intermediate values would have silently stopped being hashed
+at every level except the outermost. Fixed by applying `_seal_hash` to
+each intermediate group-seal before it joins the next level's `vals` (both
+`ms6/core.py`'s and `vs6/core.py`'s copies), and by giving `_SealTree`'s
+`build`/`_propagate` the equivalent "hash unless this is the root level"
+rule, since `_SealTree.root()` is required (and tested,
+`tests/test_sealtree.py`) to reproduce `_seal_batch(leaves, ...)` exactly
+at every intermediate level, not just the final value.
+
+Two existing tests relied on the old implicit hashing — `tests/test_sealtree.py`'s
+multi-level stress test and `tests/test_parity.py`'s `_seal_batch` parity
+cases both constructed synthetic leaves as raw ints and fed them straight
+to `_seal_batch`/`_SealTree`. Updated both to hash their synthetic leaves
+via the newly-exported `_seal_hash` (added to `tests/harness.py`) before
+use, same as any real caller now must.
+
+### Verified
+
+pyflakes/vulture clean. `python3 -m tests`, 2 consecutive full runs:
+90/90, including `copy parity` (ms6.py <-> vs6.py output comparison) and
+`stage 4 cache` (`_SealTree` vs. `_seal_batch` equality at every level).
+
+## 69. Stale-comment sweep, entries 63-68
+
+**Request** — "Cleanup the comments and remove any staled comments then
+copy the chat session into the ms6_vibe.md file."
+
+Targeted grep for commented-out code left over from this session's several
+rounds of external/manual edits (`^\s*#\s*return`, `^\s*#\s*H = `, etc.)
+across every file touched in entries 63-68. Found one real hit:
+`ms6/utils6.py`'s `seal_row_mod` still had a dead `# return
+int(self.vsum_level_fold_mod(...))` line from an earlier abandoned version,
+and its docstring still described that abandoned `vsum_level_fold_mod`-
+based approach rather than the `pow(vsum_level(1, ...), N, mod)` construction
+entry 67 fixed it to actually use. Removed the dead line, rewrote the
+docstring to match the real implementation and cross-reference entry 67's
+regression test. Grepped separately for `eval_level_mod2` and for
+`_seal_rows`/hash-related stale wording across `docs/`/`README*`: none
+found, entry 68's docstring updates already covered every live reference.
+
+### Verified
+
+`python3 -m tests`: 90/90 after the comment fix.
