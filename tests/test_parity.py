@@ -104,7 +104,59 @@ def run(check):
                                    _vut.convolve_h_vectors_mod(A_, B_, 3, mod_)),
         "mul_combinations_mod": (ut.mul_combinations_mod(3, ps_, M_, mod_),
                                  _vut.mul_combinations_mod(3, ps_, M_, mod_)),
+        "mul_combinations_mod (b=4)": (ut.mul_combinations_mod(3, ps_, M_, mod_, b=4),
+                                       _vut.mul_combinations_mod(3, ps_, M_, mod_, b=4)),
     })
+
+    # -- swappable MULTI-level fold (partition_menu/build_partition/
+    # mul_group_hvec/mul_row_grouped) -- each menu entry is now a RECIPE
+    # (a list of (orientation, q) steps, applied recursively -- possibly
+    # several levels deep, or [] for flat), not a single (orientation, q)
+    # pair. eval_row_grouped itself is prover-only (ms6.utils6 only, see
+    # its own module docstring) so there's no counterpart to parity-check
+    # it against; everything it FEEDS (the shared menu/partition math, and
+    # the verifier-side reconstruction that consumes its output) is
+    # checked here instead.
+    CS_ = 12
+    D_ = 3
+    X_row = [ri(100) for _ in range(CS_)]
+    Y_row = [ri(100) for _ in range(CS_)]
+    menu_ = ut.partition_menu(CS_)
+    check(f"swappable fold : partition_menu({CS_}) has recipes deeper than one level "
+          f"(max depth {max(len(r) for r in menu_)})", max(len(r) for r in menu_) > 1)
+    parity("ms6.utils6 <-> vs6.utils6 (partition menu)", {
+        "partition_menu": (menu_, _vut.partition_menu(CS_)),
+        **{
+            f"build_partition({recipe})": (ut.build_partition(recipe, CS_),
+                                           _vut.build_partition(recipe, CS_))
+            for recipe in menu_
+        },
+    })
+
+    grouped_cases = {}
+    for recipe in menu_:
+        partition_ = ut.build_partition(recipe, CS_)
+        sweeps_ = ut.eval_row_grouped(D_, X_row, mod_, partition_)
+        grouped_cases[f"mul_row_grouped({recipe})"] = (
+            ut.mul_row_grouped(sweeps_, Y_row, partition_, D_, mod_),
+            _vut.mul_row_grouped(sweeps_, Y_row, partition_, D_, mod_),
+        )
+    parity("ms6.utils6 <-> vs6.utils6 (swappable fold)", grouped_cases)
+
+    # every partition on the menu must reconstruct the SAME row-level h_d
+    # ms6.core._seal_grid's own row fold computes -- this is the actual
+    # swappability property (see mul_row_grouped's docstring), not just
+    # copy parity, so it's checked against ground truth here too, not
+    # just ms6.utils6 vs. vs6.utils6 agreement with each other. Includes
+    # multi-level (depth > 1) recipes, not just the original single-step
+    # ones -- the affine-composition identity build_partition relies on
+    # must hold at every depth the menu actually offers.
+    XY_row = [(x * y) % mod_ for x, y in zip(X_row, Y_row)]
+    target_ = ut.vsum_level_fold_mod(D_, mod_, values=XY_row, global_keys=True)
+    check("swappable fold : every partition_menu entry reconstructs _seal_grid's own row target",
+          all(ut.mul_row_grouped(ut.eval_row_grouped(D_, X_row, mod_, ut.build_partition(recipe, CS_)),
+                                  Y_row, ut.build_partition(recipe, CS_), D_, mod_) == target_
+              for recipe in menu_))
 
     _a1, _a2 = u.Acc(3, 12), _vu.Acc(3, 12)
     for _v in svals:

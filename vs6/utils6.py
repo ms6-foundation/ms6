@@ -28,6 +28,7 @@ this split is kept long-term.
 """
 import sys
 import hashlib
+import math
 from collections import Counter, defaultdict
 from itertools import combinations_with_replacement
 
@@ -211,6 +212,29 @@ class Utils:
 
         return int(tot)
 
+
+    def sparse_expand(self, digest_str, target_len, mod, k=10):
+        """Extend a fixed-width domain_hash digit string out to
+        `target_len` decimal digits by APPENDING bespoke-hash-derived
+        filler digits after it -- never transforming digest_str's own
+        digits. Must stay byte-for-byte identical to ms6.utils6.Utils's
+        own copy (see that module's docstring for the full rationale --
+        why appending rather than transforming keeps this safe to build
+        on `hash()`, which has no collision-resistance argument of its
+        own) -- vs6 needs this to independently reproduce the SAME
+        widened H1 rows ms6.core._vs6_batch's own interlace_mod
+        reconstruction must line up against, column-for-column, for a
+        claimed item.
+
+        A no-op (returns digest_str unchanged) whenever target_len is
+        already met."""
+        if len(digest_str) >= target_len:
+            return digest_str
+        need = target_len - len(digest_str)
+        filler = str(self.hash(int(digest_str), mod, k)).zfill(need)
+        return digest_str + filler[-need:]
+
+
     def domain_hash(self, data):
         """SHAKE128 digest of `data` (bytes), as a fixed-width decimal digit
         string. Must stay byte-for-byte identical to ms6.utils6.Utils's own
@@ -318,6 +342,7 @@ class Utils:
             return [1] + [0] * N
         return acc
 
+
     def vsum_level_fold_mod(self, k, mod, values, chunk_size=20, b=1, global_keys=False):
         """Thin wrapper around fold_h_vector_mod -- see ms6/utils6.py's copy for
         the full rationale. Reached only via mul_combinations_mod
@@ -326,6 +351,12 @@ class Utils:
         return self.fold_h_vector_mod(k, mod, groups, b=b, global_keys=global_keys)[k]
 
 
+    def multinomial(self, P, deg):
+            """deg! / prod(p! for p in P) -- gen.py's fast_coeff, without the cache."""
+            return math.prod(range(P[0] + 1, deg + 1)) // math.prod(
+                math.factorial(p) for p in P[1:])
+
+    
     def deep_prod(self, a, b):
         """Recursively compute elementwise (Hadamard) product of arbitrarily nested lists."""
         if isinstance(a, list) and isinstance(b, list):
@@ -334,7 +365,7 @@ class Utils:
             return [self.deep_prod(x, y) for x, y in zip(a, b)]
         return a * b
     
-    def eval_level_mod(self, N, values, mod, max_idx=None, coef=True):
+    def eval_level_mod(self, N, values, mod, max_idx=None, coef=False):
         """Groups per-position multiset products into per-idx buckets,
         every power and every combo product reduced mod `mod` so the
         accumulated products never grow past `mod`'s size no matter how
@@ -347,18 +378,15 @@ class Utils:
 
         `coef` controls whether each combo's product is scaled by its own
         public multinomial coefficient (self.multinomial, from the combo's
-        run-length shape) before landing in its idx bucket: coef=True (the
-        default) makes the buckets this returns sum to (sum_j values[j])**N,
-        not h_N(values) the way an unweighted enumeration would -- used this
-        way by ms6.core._finish_ps6/ps6, paired against mul_combinations_mod
-        below (which calls back into this same enumeration with coef=False,
-        so the two never duplicate the combinatorial walk) -- the
+        run-length shape) before landing in its idx bucket: coef=True makes
+        the buckets this returns sum to (sum_j values[j])**N, not h_N(values)
+        the way the default (coef=False) unweighted enumeration does -- the
         multinomial theorem's twisted-bilinear form, (sum_j x_j*y_j)**N =
-        sum_C ce(C)*monomial_x(C)*monomial_y(C), makes that pairing
-        reconstruct the same total either way, as long as the weight lands
-        on exactly one side. See _seal_grid's own row-fold
-        (pow(vsum_level(...), N, mod)) for the matching commit-time side of
-        this identity.
+        sum_C ce(C)*monomial_x(C)*monomial_y(C), would make a coef=True/
+        coef=False pairing reconstruct that (sum)**N total, if anything
+        still paired the two that way; nothing in this codebase does
+        (see below) -- coef=True is unused by ps6/vs6 today, kept for
+        anyone building a different pairing on top of this enumeration.
 
         The multinomial weight is 1 at idx=0 and idx=N*(L-1) (each realized
         by exactly one combo, all N copies at one position) -- so it does
@@ -372,18 +400,35 @@ class Utils:
         derived for every combo; only the conditionally-large product is
         skipped.
 
-        No per-query grouping parameter here (there was one, q_chunk_size,
-        removed): this reconstruction is a bilinear pairing (this function's
-        own X-side output against mul_combinations_mod's independent Y-side
-        one), and grouping q raw values into one on either side before that
-        pairing runs into the same wall regardless of the grouping method --
-        combining two q>1-wide numbers and then multiplying them always
-        produces cross-digit terms (grouping [X0,X1] into X0+X1*10 and
-        [Y0,Y1] the same way gives (X0+X1*10)*(Y0+Y1*10), which carries an
-        X0*Y1+X1*Y0 term the flat, ungrouped target never has). Real
-        per-query grouping would need _seal_grid's own row identity to
-        become a genuinely nested/multi-level construction, not a
-        prove/verify-side-only pre-transform on top of this one."""
+        ms6.core._finish_ps6/ps6 call this (coef=False, the default) via
+        ms6.utils6.Utils.eval_row_grouped, per group and per degree 1..d
+        (or once, at degree d only, when the chosen partition is a single
+        group -- see eval_row_grouped's own docstring), paired against
+        this function's own mul_combinations_mod/mul_group_hvec Y-side
+        reconstruction below. The row's true target is
+        ms6.core._seal_grid's h_d(H1) (ut.vsum_level_fold_mod(d, mod,
+        values=H1, global_keys=True), NOT (sum)**N/pow(vsum_level(...), N,
+        mod) -- see ms6_vibe.md for why that construction was replaced),
+        which is exactly what mul_row_grouped's Cauchy-product machinery
+        reconstructs regardless of grouping (see h_vector_mod/
+        fold_h_vector_mod's own docstrings for the identity that makes
+        that grouping-invariance exact, not approximate).
+
+        A per-query GROUPING parameter now exists at the row level (see
+        partition_menu/build_partition/mul_group_hvec below) -- but it
+        lives one level up from this function's own Y-side input, not as
+        a parameter here: the earlier, removed q_chunk_size design tried
+        to group q raw VALUES together before this bilinear pairing ran at
+        all, which produces unavoidable cross-digit terms regardless of
+        grouping method (combining two q>1-wide numbers before multiplying
+        them always does -- grouping [X0,X1] into X0+X1*10 and [Y0,Y1] the
+        same way gives (X0+X1*10)*(Y0+Y1*10), which carries an X0*Y1+X1*Y0
+        term the flat, ungrouped target never has). The swappable fold
+        instead groups whole COLUMNS of a row into g-wide blocks, each
+        block getting its OWN full eval_level_mod/mul_combinations_mod
+        pairing at every degree up to d, then Cauchy-products the blocks'
+        own h-vectors together -- an exact identity, not a pre-transform on
+        top of this function's own per-value arithmetic."""
         L = len(values)
         if L == 1:
             if max_idx is not None and max_idx <= 0:
@@ -428,7 +473,7 @@ class Utils:
         return list(r.values())
     
     
-    def mul_combinations_mod(self, N, ps, values, mod):
+    def mul_combinations_mod(self, N, ps, values, mod, b=1):
         """`ps` (from eval_level_mod) and `vals` (from interlace_mod) are
         already mod-reduced, and every product/power here is reduced mod
         `mod` too, so nothing this function touches ever exceeds `mod`'s
@@ -436,6 +481,18 @@ class Utils:
         picked via itertools.combinations_with_replacement, walked once
         per combo into (position, run-length) pairs), so its bucket order
         lines up with eval_level_mod's own.
+
+        `b` sets the tail vsum_level_fold_mod's own base (10**b) for the
+        positional weighting across `values`' own positions -- default 1
+        matches every pre-existing call site (a row folded at its true,
+        global column stride). The swappable multi-level fold (see
+        partition_menu/build_partition/mul_group_hvec below) is the one
+        caller that passes b != 1: reconstructing a single GROUP's own
+        local h_i needs the group's own column stride (B from
+        build_partition) here, not the row's global stride 1, so a later
+        constant correction factor (mul_group_hvec) can convert the
+        group-local result into the row-global one it needs to Cauchy-
+        product against every other group's.
 
         KNOWN LEAK -- STRUCTURAL, and not something a modulus choice fixes:
         idx=0 and idx=N*(L-1) (choosing one column with full multiplicity
@@ -485,7 +542,7 @@ class Utils:
         construction. This smaller-leak combinatorial version is the
         default in ps6/vs6; d=27 is unsupported by that tradeoff, not by
         oversight."""
-        r = self.eval_level_mod(N, values, mod, coef=False)
+        r = self.eval_level_mod(N, values, mod)
 
         bucket_sums = [
             sum(v % mod for v in val_list) % mod
@@ -493,4 +550,220 @@ class Utils:
         ]
 
         # vsum_level_fold_mod, see ms6.py's row-seal for the same substitution/rationale.
-        return self.vsum_level_fold_mod(1, mod, bucket_sums, b=1, global_keys=True)
+        return self.vsum_level_fold_mod(1, mod, bucket_sums, b=b, global_keys=True)
+
+
+    def partition_menu(self, chunk_size):
+        """Public per-row partition menu for the swappable MULTI-level fold
+        (see ms6.utils6.Utils.eval_row_grouped and mul_row_grouped below)
+        -- every RECIPE (a list of (orientation, q) steps, applied in
+        order by build_partition) that recursively splits a chunk_size-
+        wide row down to a set of equal-width leaf groups h_vector_mod's
+        exact Cauchy-product identity can reconstruct (see h_vector_mod/
+        fold_h_vector_mod's own docstrings). Each entry is a full recipe,
+        not a single step: [] (the empty recipe) is 'flat' -- one leaf,
+        the whole row, entry 0 -- and every other entry recursively
+        refines it: at each step, EVERY leaf produced so far is
+        independently split q-ways, 'row-major' (locally contiguous,
+        local stride 1 within that leaf) or 'transposed' (locally
+        strided, local stride = that leaf's own current width // q) --
+        see build_partition for exactly how a step's LOCAL split composes
+        into each leaf's TRUE row-column (A, B). This is genuinely deeper
+        than a single split: composing row-major/transposed steps across
+        levels realizes leaf strides no single-level (orientation, q)
+        pair can (e.g. offset+stride-5 leaves of width 2 from a row-
+        major(10)-then-transposed(5) recipe, on a chunk_size=100 row --
+        neither plain 'row-major' nor 'transposed' at ANY single q
+        produces that shape) -- a materially richer set of distinct
+        disclosure patterns for the SAME prover to draw from at query
+        time, not just a re-expression of the one-level menu at smaller q.
+
+        Recursion at each leaf stops once its own width has no divisor q
+        with 1 < q < width -- the same q=1/q=width exclusions the one-
+        level menu always applied, just re-applied at every level instead
+        of only the top one: a step that would leave a width-1 leaf
+        discloses one column's raw value outright (q=width), and q=1 is a
+        no-op split, so neither is ever offered. This makes recursion
+        depth a function of chunk_size's own factorization -- 111 total
+        recipes (max depth 3) at chunk_size=100, cheap to generate once
+        per proof; no explicit depth cap is needed since the
+        factorization itself bounds it.
+
+        Pure function of the public chunk_size only -- never derived from
+        iset or any other claim-dependent input, for the same reason the
+        since-removed q_chunk_size = len(touched)//3 design was gameable
+        (see ms6_vibe.md). Kept identical to ms6.utils6.Utils's own copy
+        (parity-checked, tests/test_parity.py) so both sides agree on
+        every row's menu from chunk_size alone -- the prover's disclosed
+        per-row choice is just an index into this list."""
+        menu = [[]]
+
+        def _extend(width, recipe):
+            for q in range(2, width):
+                if width % q != 0:
+                    continue
+                for orientation in ('row-major', 'transposed'):
+                    next_recipe = recipe + [(orientation, q)]
+                    menu.append(next_recipe)
+                    _extend(width // q, next_recipe)
+
+        _extend(chunk_size, [])
+        return menu
+
+
+    def build_partition(self, recipe, chunk_size):
+        """Realizes one partition_menu entry -- a RECIPE, a list of
+        (orientation, q) steps -- as a list of (positions, A, B) leaf
+        triples, applying each step to every leaf produced by the steps
+        before it (starting from one leaf: the whole row).
+
+        positions -- a leaf's column indices into the chunk_size-wide row,
+        in the order its own local h-vector treats as local positions
+        0..len(positions)-1.
+
+        A -- the leaf's own lowest-local-position true column; B -- the
+        column-index stride between the leaf's consecutive local
+        positions. A column at leaf-local position p therefore sits at
+        true row column A + B*p -- same meaning as a single-level
+        partition's own (A, B), because composing affine maps stays
+        affine at any depth: splitting a CURRENT leaf (itself A_old +
+        B_old*(local index)) row-major-wise into q pieces of width
+        w=len(leaf)//q gives piece i the local sub-range [i*w, (i+1)*w),
+        i.e. true columns A_old + B_old*(i*w) .. stride B_old -- so the
+        piece's own (A, B) is (A_old + B_old*i*w, B_old), UNCHANGED
+        stride, just a shifted offset. Splitting transposed-wise instead
+        picks local sub-positions i, i+q, i+2q, ... within the leaf, i.e.
+        true columns A_old + B_old*i, stride B_old*q -- so the piece's
+        own (A, B) is (A_old + B_old*i, B_old*q). Either way the result is
+        again a simple (positions, A, B) triple, so a second (or third,
+        ...) step composes onto it exactly the same way -- this is what
+        lets a recipe be applied as a plain left-to-right loop instead of
+        needing explicit tree recursion. Both A and B feed the constant
+        per-leaf correction factor mul_group_hvec applies to convert a
+        leaf's own locally-weighted h-vector into the row's globally-
+        weighted one, before every leaf's h-vector is Cauchy-product-
+        folded together (convolve_h_vectors_mod) into the row's final h_d
+        -- see mul_group_hvec's own docstring for the derivation; that
+        derivation only ever depends on a leaf's final (A, B, width),
+        never on how many steps produced it.
+
+        recipe=[] (the empty recipe, 'flat''s own realization) returns the
+        single whole-row leaf, A=0, B=1 -- same as before.
+
+        Every q in `recipe` must evenly divide the width of whatever leaf
+        it's applied to at that point -- partition_menu only ever offers
+        such recipes (see its own docstring for why an uneven division
+        isn't supported, the same reasoning as the original single-level
+        menu, just checked at every level here instead of only the top
+        one)."""
+        leaves = [(list(range(chunk_size)), 0, 1)]
+        for orientation, q in recipe:
+            next_leaves = []
+            for positions, A, B in leaves:
+                w = len(positions)
+                if w % q != 0:
+                    raise ValueError(
+                        f"recipe step q={q} does not evenly divide current leaf width {w}")
+                g = w // q
+                if orientation == 'row-major':
+                    for i in range(q):
+                        next_leaves.append((positions[i * g:(i + 1) * g], A + B * (i * g), B))
+                elif orientation == 'transposed':
+                    for i in range(q):
+                        next_leaves.append((positions[i::q], A + B * i, B * q))
+                else:
+                    raise ValueError(f"unknown partition orientation: {orientation!r}")
+            leaves = next_leaves
+        return leaves
+
+
+    def mul_group_hvec(self, sweep, Y_group, A, B, q_local, C_global, d, mod):
+        """Verifier-side reconstruction of one group's own h-vector
+        [1, h_1, ..., h_d] from the prover's disclosed per-degree sweep
+        (ms6.utils6.Utils.eval_row_grouped, one group's worth) plus this
+        group's own Y-side values -- mul_combinations_mod, called once per
+        degree 1..d (not a single top-degree call, for the same reason
+        eval_row_grouped discloses every degree).
+
+        mul_combinations_mod(i, sweep[i-1], Y_group, mod, b=B) reconstructs
+        h_i of the group's own elementwise product, positionally weighted
+        as if the group's own local index 0..q_local-1 (stride B apart)
+        were the WHOLE dataset -- i.e. the group's own *local* h_i, using
+        its own top local position q_local-1 as the reference point, not
+        the row's shared reference point C_global = chunk_size - 1 a
+        single unsplit h_vector_mod call over the whole row would use.
+
+        The two differ by one constant factor per column: a column at
+        group-local position p sits at true row column A + B*p, so its
+        true (row-global) weight is 10**(B*(C_global - A - B*p)), while
+        the call above assigned it the LOCAL weight 10**(B*(q_local-1-p))
+        (reference point = the group's own top local position). Dividing
+        true by local cancels every p-dependent term (both are B*p
+        offsets from their own reference point), leaving one FIXED
+        per-group ratio -- 10**(B*(C_global - A - B*(q_local-1))) --
+        common to every column in the group. Since h_i is a degree-i
+        homogeneous sum of i-fold column products, raising that fixed
+        ratio to the i-th power converts the local h_i into the true,
+        row-globally-weighted one -- with no per-column work, one pow()
+        per degree.
+
+        This is the exact derivation validated against real ps6/vs6-shaped
+        data this session (both row-major, B=1, and transposed, B=q,
+        partitions reconstruct bit-identically to the unsplit h_d(row)
+        this way) -- see ms6_vibe.md. It's what makes the partition
+        swappable at query time without _seal_grid itself ever changing:
+        _seal_grid's own row fold (vsum_level_fold_mod's h_d) is exactly
+        what mul_row_grouped below reconstructs, for ANY partition on the
+        menu."""
+        exp = (C_global - A - B * (q_local - 1)) % (mod - 1)
+        correction = pow(10, exp, mod)
+        hvec = [1]
+        for i in range(1, d + 1):
+            h_local = self.mul_combinations_mod(i, sweep[i - 1], Y_group, mod, b=B)
+            hvec.append((h_local * pow(correction, i, mod)) % mod)
+        return hvec
+
+
+    def mul_row_grouped(self, sweeps, Y_row, partition, d, mod):
+        """Verifier-side row-level reconstruction: combine every group's
+        own h-vector (mul_group_hvec) via convolve_h_vectors_mod's Cauchy
+        product -- the disjoint-union identity h_vector_mod's docstring
+        proves -- into the row's final h_d. Matches ms6.core._seal_grid's
+        own row fold (vsum_level_fold_mod(d, mod, values=H1,
+        global_keys=True)) bit-for-bit, REGARDLESS of which partition
+        (partition_menu) the prover chose for this row: swapping
+        row-major for transposed grouping, or any other menu entry, never
+        changes this result -- that grouping-invariance (built on
+        h_vector_mod's exact Cauchy-product identity, not the (sum)**N
+        construction _seal_grid used before this session's revert -- see
+        ms6_vibe.md) is what makes the fold swappable at query time. This
+        is the one function _vs6_batch actually calls to replace its old
+        flat `mul_combinations_mod(d, ps[i], M[i], mod)` per-row call.
+
+        C_global (the shared reference point every group's correction
+        factor in mul_group_hvec is computed against) is chunk_size - 1,
+        i.e. len(Y_row) - 1 -- the same derivation fold_h_vector_mod's own
+        global_keys=True path uses, from the row's total width.
+
+        SINGLE-GROUP SPECIAL CASE: with only one group there's nothing to
+        Cauchy-product against, so this skips building the full [1..d]
+        h-vector entirely and reconstructs h_d directly from ms6.utils6.
+        Utils.eval_row_grouped's own single-degree disclosure (see its
+        docstring's matching special case) -- mul_combinations_mod(d,
+        sweeps[0][0], Yg, mod, b=B) once, corrected by pow(correction, d,
+        mod) once, exactly mirroring the pre-swappable-fold flat path's
+        cost (one degree-d combinatorial pairing, not d of them)."""
+        C_global = len(Y_row) - 1
+        if len(partition) == 1:
+            positions, A, B = partition[0]
+            Yg = [Y_row[j] for j in positions]
+            h_local = self.mul_combinations_mod(d, sweeps[0][0], Yg, mod, b=B)
+            exp = (C_global - A - B * (len(positions) - 1)) % (mod - 1)
+            correction = pow(10, exp, mod)
+            return (h_local * pow(correction, d, mod)) % mod
+        acc = None
+        for sweep, (positions, A, B) in zip(sweeps, partition):
+            Yg = [Y_row[j] for j in positions]
+            hv = self.mul_group_hvec(sweep, Yg, A, B, len(positions), C_global, d, mod)
+            acc = hv if acc is None else self.convolve_h_vectors_mod(acc, hv, d, mod)
+        return acc[d]

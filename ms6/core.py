@@ -18,7 +18,17 @@ ut = u.Utils()
 FLUSH = 4096                          # iterations buffered before C-speed counting
 
 # --- default parameters, shared by ms6 (commit) / ps6 (open) / vs6 (verify) ---
-DEFAULT_CHUNK_SIZE = 40
+# 100, not 40: wide enough that ut.sparse_expand (see _hash_item's own
+# docstring) has real headroom to fill past DOMAIN_HASH_DIGITS (78) with
+# genuine per-item content rather than mostly u.PAD, AND wide enough that
+# partition_menu(100)'s recursive, multi-level recipes (see ms6.utils6.
+# Utils.partition_menu) offer a materially richer set of leaf-grouping
+# shapes -- 111 total recipes, up to 3 levels deep -- than partition_
+# menu(40) did (13 single-level entries) for the swappable fold to pick
+# from at query time -- see ms6_vibe.md for the benchmark comparing
+# eval_level_mod's flat combinatorial cost at this width against the
+# grouped fold's own cost.
+DEFAULT_CHUNK_SIZE = 100
 DEFAULT_BATCH_SIZE = 1000
 DEFAULT_WORKERS = 1
 DEFAULT_KEEP_HM = True
@@ -458,7 +468,8 @@ def _h1_salt(s, batch_index):
     return hashlib.shake_256(f"ms6-h1-salt:{s}:{batch_index}".encode()).hexdigest(16)
 
 
-def _hash_item(val, h1_salt=""):
+def _hash_item(val, h1_salt="", chunk_size=DEFAULT_CHUNK_SIZE,
+               rand_edge_size=DEFAULT_RAND_EDGE_SIZE, mod=DEFAULT_MOD):
     """One item's two independent hash-digit strings -- H1 (feeds accH, the
     primary commitment grid) and H2 (feeds accS, the blinding-side
     accumulator) -- both via Utils.domain_hash (SHAKE128), tagged apart by
@@ -466,19 +477,39 @@ def _hash_item(val, h1_salt=""):
 
     This is a real cryptographic hash, unlike utils6.Utils.hash() (still
     used elsewhere in this file -- the seal-tree fold, hmax sizing -- but
-    NOT here anymore): that function is a fixed, public digit-substitution
-    transform with no collision-resistance argument behind it, which is
-    exactly what the eprint's Open Problem on the domain hash used to flag
-    as an unproven assumption. domain_hash closes that: H1/H2 collision
-    resistance is now an ordinary SHAKE128 assumption, not a bespoke one.
+    NOT for the digest itself, see below): that function is a fixed,
+    public digit-substitution transform with no collision-resistance
+    argument behind it, which is exactly what the eprint's Open Problem on
+    the domain hash used to flag as an unproven assumption. domain_hash
+    closes that: H1/H2 collision resistance is now an ordinary SHAKE128
+    assumption, not a bespoke one.
 
     domain_hash's output is fixed-width (DOMAIN_HASH_DIGITS decimal
     digits, zero-padded) regardless of val's own magnitude, unlike the old
-    hash()'s input-magnitude-scaling output -- so unlike before, every
-    item's H1/H2 are the same length. _ms6_batch's x-sizing (measure the
-    widest digest actually hashed in a batch, then size x to it) still
-    runs unchanged: it simply always measures the same width now, rather
-    than needing to.
+    hash()'s input-magnitude-scaling output -- so every item's raw H1/H2
+    are the same length before the widening step below runs too.
+
+    SPARSE WIDENING: DOMAIN_HASH_DIGITS (78) is fixed regardless of
+    chunk_size, so a chunk_size whose real_width (chunk_size -
+    rand_edge_size) comfortably exceeds it -- chunk_size=100 at the
+    default rand_edge_size=6, real_width=94 -- would otherwise leave every
+    row mostly u.PAD (16 narrow-chunk pad columns here, on top of the 6
+    fixed edge ones -- see chunk_of/_attach_edges_pad). ut.sparse_expand
+    widens h1s/h2s out to _item_digest_rows(chunk_size, rand_edge_size) *
+    real_width digits -- an exact multiple of real_width, so chunk_of's
+    OWN existing padding logic downstream sees no shortfall left to pad at
+    all -- by APPENDING utils6.Utils.hash()-derived filler after the real
+    digest, never touching the real digest's own digits (see sparse_
+    expand's own docstring for why that's what keeps this safe to build on
+    `hash()` despite the same collision-resistance caveat this docstring's
+    second paragraph raises against using it for the digest itself: two
+    items still need an actual domain_hash collision to land in the same
+    row, since the filler is never what makes two DIFFERENT digests
+    distinguishable, only what fills space past them). A no-op whenever
+    real_width alone already covers DOMAIN_HASH_DIGITS in one row's worth
+    (chunk_size's usual range) or a row count already covers it without
+    any excess (see sparse_expand's own no-op case) -- most existing
+    chunk_size choices are unaffected.
 
     s_exp used to be accepted here too, unused in the body -- dropped
     (along with the matching dead parameter on _item_rows/_ms6_batch and
@@ -495,6 +526,9 @@ def _hash_item(val, h1_salt=""):
     automatically without needing its own copy."""
     h1s = ut.domain_hash(f"{H1_TAG}:{h1_salt}:{val}".encode())
     h2s = ut.domain_hash(f"{H2_TAG}:{h1s}".encode())
+    target_len = _item_digest_rows(chunk_size, rand_edge_size) * (chunk_size - rand_edge_size)
+    h1s = ut.sparse_expand(h1s, target_len, mod)
+    h2s = ut.sparse_expand(h2s, target_len, mod)
     return h1s, h2s
 
 
@@ -522,7 +556,8 @@ def _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size, h1_salt, slot_inde
     return hm1, hm2
 
 
-def _item_rows(val, chunk_of, perm, rand_edge_size=0, h1_salt="", slot_index=0):
+def _item_rows(val, chunk_of, perm, rand_edge_size=0, h1_salt="", slot_index=0,
+               chunk_size=DEFAULT_CHUNK_SIZE, mod=DEFAULT_MOD):
     """One item's permuted, edge-padded digit rows for the H side (hm1)
     and the S side (hm2), against an ALREADY-SIZED, ALREADY-NARROWED
     (chunk_size - rand_edge_size) chunk_of/perm pair (x fixed). See
@@ -534,8 +569,15 @@ def _item_rows(val, chunk_of, perm, rand_edge_size=0, h1_salt="", slot_index=0):
     cancel. h1_salt must be the SAME batch's h1_salt (see _h1_salt) the
     original commit used, and slot_index the SAME local index within the
     batch, or the recomputed hm1/hm2 silently disagree with what's already
-    folded into that batch's counts."""
-    h1s, h2s = _hash_item(val, h1_salt)
+    folded into that batch's counts.
+
+    chunk_size/mod must be the SAME batch's own chunk_size/mod too (a
+    Commitment's config, fixed for its whole life) -- _hash_item's sparse
+    widening (see its own docstring) is a deterministic function of
+    exactly these two plus rand_edge_size, so passing the batch's real
+    values here reproduces the SAME widened h1s/h2s the original commit
+    computed, not just the same-length ones."""
+    h1s, h2s = _hash_item(val, h1_salt, chunk_size, rand_edge_size, mod)
     return _rows_from_hash(h1s, h2s, chunk_of, perm, rand_edge_size, h1_salt, slot_index)
 
 
@@ -588,7 +630,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
-        H = [pow(ut.vsum_level(H1), d, mod) for H1 in H]
+        H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
 
     h = ut.vsum_level(H, b=chunk_size)
     return _seal_hash(h), S
@@ -648,7 +690,7 @@ def _ms6_batch(vals, chunk_size, d, q, s, mod=DEFAULT_MOD, s_mod=DEFAULT_S_MOD,
     # construction, always wide enough for every item this batch commits.
     # The per-cell blinding *values* are still salt-derived (_s0_grid);
     # only the grid's row *count* stopped taking its size from the salt.
-    hashed = [_hash_item(val, h1_salt) for val in vals]
+    hashed = [_hash_item(val, h1_salt, chunk_size, rand_edge_size, mod) for val in vals]
     widest = max((len(h) for pair in hashed for h in pair), default=1)
     # ceil(widest / real_width), NOT chunk_size: each row only carries
     # real_width real digits now (the rest is edge padding), so sizing
@@ -846,6 +888,25 @@ def _seal_rows(val, chunk_of):
 # and needs this instead now that that assumption no longer holds.)
 def _seal_fold_rows(chunk_size):
     return -(-u.DOMAIN_HASH_DIGITS // chunk_size)
+
+
+def _item_digest_rows(chunk_size, rand_edge_size):
+    """Row count (x) an item's own H1/H2 digest needs at this chunk_size/
+    rand_edge_size -- the SAME formula _ms6_batch's own x-sizing already
+    reduces to (domain_hash is fixed-width, so 'measure the widest digest
+    actually hashed' always measures DOMAIN_HASH_DIGITS today -- see
+    _hash_item's docstring), pulled out as its own pure function of public
+    params alone so _hash_item can compute a widening target BEFORE
+    hashing runs, with no dependency on _ms6_batch's own post-hash
+    measurement (see _hash_item's own sparse-expansion paragraph for why
+    that matters: this must be side-effect-free and call-order-
+    independent, or an append/replace years after the original commit
+    could widen to a different x than the batch was actually built with).
+    real_width, not chunk_size: each row only ever carries real_width
+    real digits (the rest is _attach_edges_pad's fixed edge margin), same
+    reasoning as _ms6_batch's own rows= line."""
+    real_width = chunk_size - rand_edge_size
+    return max(1, -(-u.DOMAIN_HASH_DIGITS // real_width))
 
 
 def _seal_from_counts(cnt, chunk_size, d, q, mod):
@@ -1340,7 +1401,7 @@ class Commitment:
 
         hm1, hm2 = _item_rows(val, self._chunk_of(last), self.perms[last],
                               self.rand_edge_size, self.h1_salts[last],
-                              len(self.hm_list[last]))
+                              len(self.hm_list[last]), self.chunk_size, self.mod)
         self._check_fits(last, val, hm1, hm2)
         _apply_rows(self.cntH[last], hm1, +1)
         _apply_rows(self.cntS[last], hm2, +1)
@@ -1364,8 +1425,10 @@ class Commitment:
         chunk_of, perm = self._chunk_of(b), self.perms[b]
 
         h1_salt = self.h1_salts[b]
-        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.rand_edge_size, h1_salt, local)
-        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.rand_edge_size, h1_salt, local)
+        old_h1, old_h2 = _item_rows(self.vals[index], chunk_of, perm, self.rand_edge_size, h1_salt, local,
+                                    self.chunk_size, self.mod)
+        new_h1, new_h2 = _item_rows(new_val, chunk_of, perm, self.rand_edge_size, h1_salt, local,
+                                    self.chunk_size, self.mod)
         self._check_fits(b, new_val, new_h1, new_h2)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
@@ -1400,7 +1463,8 @@ class Commitment:
 
         old_h1, old_h2 = _item_rows(self.vals[index], self._chunk_of(b),
                                     self.perms[b], self.rand_edge_size,
-                                    self.h1_salts[b], local)
+                                    self.h1_salts[b], local,
+                                    self.chunk_size, self.mod)
         _apply_rows(self.cntH[b], old_h1, -1)
         _apply_rows(self.cntS[b], old_h2, -1)
 
@@ -1640,7 +1704,7 @@ def _ps6_batch(hm, iset, chunk_size, d, q, S, mod=DEFAULT_MOD, workers=DEFAULT_W
         Srow = S[r]
         result.append([(row[j] * pow(Srow[j], d, mod)) % mod for j in range(chunk_size)])
 
-    return _finish_ps6(result, d, workers, mod)
+    return _finish_ps6(result, d, chunk_size, workers, mod)
 
 
 def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=None):
@@ -1711,17 +1775,40 @@ def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=N
     return ps_list
 
 
-def _finish_ps6(result, d, workers, mod):
-    # eval_level_mod (combinatorial enumeration over combinations_with_
-    # replacement) leaks a handful of edge columns per row via modular root
-    # extraction, at the cost of combinatorial blow-up for large d -- see
-    # its own docstring's KNOWN LEAK discussion. This construction only
-    # supports the small-d regime that combinatorial blow-up keeps
-    # tractable; reaching larger d without that blow-up would need a
-    # fundamentally different (and, per the same discussion, more leaky)
-    # enumeration strategy, not something wired into this codebase.
+def _finish_ps6(result, d, chunk_size, workers, mod):
+    # eval_row_grouped (per-group, per-degree combinatorial enumeration --
+    # see its own docstring) leaks a handful of edge columns per row via
+    # modular root extraction, at the cost of combinatorial blow-up for
+    # large d -- see eval_level_mod's own docstring's KNOWN LEAK
+    # discussion. This construction only supports the small-d regime that
+    # combinatorial blow-up keeps tractable; reaching larger d without
+    # that blow-up would need a fundamentally different (and, per the same
+    # discussion, more leaky) enumeration strategy, not something wired
+    # into this codebase.
+    #
+    # Each row draws its OWN, independent partition choice from `gen` (the
+    # same RNG source ms6.core already uses for salt draws) -- an index
+    # into ut.partition_menu(chunk_size), the public per-chunk_size list of
+    # RECIPES (each a list of (orientation, q) steps -- row-major/
+    # transposed, possibly several levels deep, or [] for flat)
+    # ut.eval_row_grouped's swappable multi-level fold supports (see
+    # partition_menu/build_partition's own docstrings for why this can't
+    # instead be derived from iset: that was tried, q_chunk_size, and was
+    # gameable -- see ms6_vibe.md). The choice is disclosed alongside the
+    # row's sweep (as (choice_idx, sweep) pairs) since the verifier needs
+    # it to rebuild the same partition and cannot derive it from anything
+    # else public.
+    menu = ut.partition_menu(chunk_size)
+    choices = [gen.randrange(len(menu)) for _ in result]
+    partitions = [ut.build_partition(menu[c], chunk_size) for c in choices]
+
     if workers and workers > 1 and len(result) > 1:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            return list(ex.map(ut.eval_level_mod, [d] * len(result), result, [mod] * len(result)))
-    return [ut.eval_level_mod(d, vals, mod) for vals in result]
+            sweeps = list(ex.map(ut.eval_row_grouped, [d] * len(result), result,
+                                  [mod] * len(result), partitions))
+    else:
+        sweeps = [ut.eval_row_grouped(d, vals, mod, partition)
+                  for vals, partition in zip(result, partitions)]
+
+    return list(zip(choices, sweeps))

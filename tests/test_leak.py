@@ -137,8 +137,25 @@ def _mount(mod, vals):
     _, hl, _, sl, hml, _, _, params = ms6(vals, D, Q, chunk_size=CS, batch_size=BS,
                                           mod=mod, s=SALT)
     iset_a, iset_b = {3}, {11}          # two ordinary, disjoint single-item claims
-    ps_a = ps6(iset_a, hl, hml, sl, params)
-    ps_b = ps6(iset_b, hl, hml, sl, params)
+
+    # ps6's own row-level fold now draws a fresh, independent per-row
+    # PARTITION choice from `gen` (see ms6.core._finish_ps6's swappable
+    # multi-level fold) -- pinned to index 0 ('flat', ut.partition_menu's
+    # own first/always-present entry) for this test only, via a bounded
+    # monkeypatch, so ps_a/ps_b's disclosed bucket structure is the SAME
+    # single flat eval_level_mod(D, ...) call this module's structural
+    # analysis is about, deterministically, on every run -- not a bug
+    # workaround: a non-'flat' choice's disclosure has a different shape
+    # (see ut.eval_row_grouped's own docstring) that this module doesn't
+    # (and structurally can't, since 'flat' is what the pre-swappable-fold
+    # protocol always disclosed) claim to characterize.
+    _orig_randrange = gen.randrange
+    gen.randrange = lambda *a, **k: 0
+    try:
+        ps_a = ps6(iset_a, hl, hml, sl, params)
+        ps_b = ps6(iset_b, hl, hml, sl, params)
+    finally:
+        gen.randrange = _orig_randrange
 
     b, r = 0, 0
     S, hm = sl[b], hml[b]
@@ -150,8 +167,20 @@ def _mount(mod, vals):
     combined_a = (row0_a * pow(S[r][0], D, mod)) % mod
     combined_b = (row0_b * pow(S[r][0], D, mod)) % mod
 
-    bucket0_a = ps_a[b][r][0]
-    bucket0_b = ps_b[b][r][0]
+    # ps_a[b][r] is now (choice_idx, sweep) -- sweep[0][0] unwraps back to
+    # the plain eval_level_mod(D, ...) bucket list this analysis is about
+    # (sweep[0] is group 0's -- the only group, under 'flat' -- own data,
+    # itself a length-1 list holding just that one bucket list, since a
+    # 'flat' choice discloses exactly one degree-D bucket list per row --
+    # see eval_row_grouped's single-group special case). sweep[0][0][0] is
+    # then that bucket list's own idx=0 bucket -- the same value ps_a[b][r]
+    # (indexed [0]) itself used to BE, before the swappable fold wrapped
+    # it in (choice_idx, sweep).
+    choice_a, sweep_a = ps_a[b][r]
+    choice_b, sweep_b = ps_b[b][r]
+    assert choice_a == 0 and choice_b == 0, "monkeypatch failed to pin 'flat'"
+    bucket0_a = sweep_a[0][0][0]
+    bucket0_b = sweep_b[0][0][0]
     holds = (len(bucket0_a) == 1 and bucket0_a[0] == pow(combined_a, D, mod)
              and len(bucket0_b) == 1 and bucket0_b[0] == pow(combined_b, D, mod))
 

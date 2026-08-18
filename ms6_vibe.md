@@ -3269,3 +3269,273 @@ trailing newline to `vs6/utils6.py`.
 
 `python3 -m tests`, 3 consecutive runs: 89/89, no flakiness, before and
 after the comment cleanup.
+
+## 75. Root-extraction on the `(sum)^d` row fold; reverted to the `h_d` construction
+
+**Request** — "Please check if there any security (hiding/binding) concern
+with the new protocol as we are now doing `pow(ut.vsum_level(H1), d, mod)`
+in the `_seal_grid`. Is the root extraction possible on H1 on verifier
+side?", then "Reverted the code to the old protocol."
+
+`_seal_grid`'s row fold, at that point, was `pow(ut.vsum_level(H1), d,
+mod)` — a single scalar raised to `d`. `DEFAULT_MOD` is a 256-bit prime
+with `gcd(d, mod-1) == 1`, so a `d`-th root mod `mod` is a single `pow()`
+away (the group order `mod-1` is public), and taking it recovers
+`vsum_level(H1)` directly — verified both abstractly and against the real
+protocol via an instrumented `vs6()` call. Worse than the pre-existing
+combinatorial `KNOWN LEAK` in `mul_combinations_mod` (which needs
+combinatorial bucket-position targeting and only ever isolates a handful
+of edge columns): here, differences between two such extractions (e.g.
+across two openings of the same row) isolate to a clean single-column
+linear term, solvable by ordinary linear algebra, no combinatorial
+targeting needed. No new *binding* concern was found — only this hiding
+regression.
+
+Reverted `_seal_grid`'s row fold back to
+`ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True)` (the `h_d`,
+complete-homogeneous-symmetric-polynomial construction) and flipped
+`eval_level_mod`'s `coef` default back to `False` in both `ms6/utils6.py`
+and `vs6/utils6.py` (`vs6/utils6.py` also gained its own `multinomial`
+copy, needed for `eval_level_mod`'s `coef=True` branch to not `NameError`
+even though unused by default).
+
+### Verified
+
+`python3 -m tests`, full suite green. Targeted probes confirmed the
+revert structurally closes the vulnerability: `h_d(H1)` isn't expressible
+as `pow(single_scalar, d, mod)` for any single scalar, so a `d`-th root
+extraction on it recovers nothing meaningful, and single-column
+differences no longer isolate cleanly the way they did under `(sum)^d`.
+
+## 76. Swappable multi-level fold — design and validation (probes only, not yet wired)
+
+**Request** — "We will keep hunting for a fixed c solution" (declining an
+S-rotation redesign sketched in discussion, in favor of keeping `c` fixed
+forever), then "Please design the multi-level fold in the `_seal_grid` and
+`eval_level_mod`/`mul_combination_mod` for the query. The rows in the
+inner fold and outer fold must be interchangeable so we can swap the inner
+and outer rows at query time," then "Yes, try to build this out as a
+fuller probe against `ps6`/`vs6`-shaped data," then "Please work through
+the partition-selection API."
+
+The foundation: `h_vector_mod` + `convolve_h_vectors_mod` already
+implement an EXACT, grouping-invariant Cauchy-product identity for `h_d`
+— unlike `(sum)^d`, ANY partition of a row's columns (including a
+transposed row-major-to-column-major swap) reconstructs the identical
+target, verified via isolated probe. Derived and verified the BILINEAR
+version this actually needs: a group's own local h-vector, reconstructed
+via a generalized `mul_combinations_mod` taking an explicit base `b`
+(the group's own column stride), plus a constant per-group correction
+factor (`10**(i*(C_global - A - B*(q_local-1))) mod (mod-1)`, applied per
+degree `i`) that converts the group's locally-weighted result into the
+row's globally-weighted one before every group's h-vector is
+Cauchy-product-folded together.
+
+Built out and validated against REAL `ps6`/`vs6`-shaped data (a real
+`Commitment`, real `S` grid, real oset row values, real claimed `M`) at
+`chunk_size=12` (2 claim configs x 4 partitions) and `chunk_size=40`
+(stress test, uneven-division handling) — matched the real batch-level `c`
+exactly in every case. Found grouped reconstruction ~11x faster than flat
+at `chunk_size=40, d=3`. Found transposed partitions need `chunk_size`
+divisible by `q` (row-major tolerates uneven division via
+`backward_chunk`'s "short first group absorbs remainder" convention;
+transposed does not, since it's not a uniform stride when group widths
+differ) — the design constraint later encoded as "`partition_menu` only
+ever offers `q` that evenly divides".
+
+Partition-selection API: rejected deriving the partition from `iset`
+(attacker-controlled — exactly as gameable as the original, since-removed
+`q_chunk_size = len(touched)//3` design). Instead: the prover draws fresh,
+independent randomness per row from a small PUBLIC menu (every `q` that
+evenly divides `chunk_size`, both row-major and transposed orientations,
+plus a flat/ungrouped option, excluding `q=1`), reusing the existing `gen`
+RNG (same source as salt draws), disclosing just an index per row.
+Characterized the security property honestly: probabilistic
+defense-in-depth that composes with `QueryGovernor`'s existing query cap,
+not a closure of `op:multiquery`'s actual root cause (S's reuse across
+queries) — genuinely closing that would still need a fixed-c
+rerandomization proof, a real redesign.
+
+### Verified
+
+Every probe stage checked against ground truth (`vsum_level_fold_mod`'s
+own `h_d`) and, at the later stages, against the real batch-level `c` a
+full `ms6()`/`ps6()`/`vs6()` round trip produces — not just internal
+self-consistency.
+
+## 77. Swappable multi-level fold wired into the real files
+
+**Request** — "Yes, wire this into the real files now."
+
+Wired entry 76's validated design into `ms6/utils6.py`, `vs6/utils6.py`,
+`ms6/core.py`, and `vs6/core.py`:
+
+- `mul_combinations_mod` gained a `b=1` parameter (default preserves every
+  existing call site's behavior) so its tail fold can use a group's own
+  column stride instead of always `b=1`.
+- Added `partition_menu`/`build_partition` (the public per-chunk_size menu
+  and its realization as `(positions, A, B)` leaf triples) to both
+  `utils6.py` copies.
+- Added `eval_row_grouped` (prover-side disclosure, `ms6/utils6.py` only —
+  `vs6/utils6.py` deliberately omits it, matching that file's own
+  documented "only what vs6's call graph touches" policy) and
+  `mul_group_hvec`/`mul_row_grouped` (verifier-side reconstruction, both
+  copies). Both `eval_row_grouped` and `mul_row_grouped` special-case a
+  single-group ("flat") partition to disclose/consume only the original
+  degree-`d` bucket list, not the full degree-1..d sweep multi-group
+  partitions need — so choosing "flat" costs exactly what the pre-existing
+  protocol always cost, and only a genuine multi-group choice pays the
+  larger disclosure.
+- `ms6/core.py`'s `_finish_ps6` now draws an independent random partition
+  choice per row (`gen.randrange(len(menu))`) and discloses
+  `(choice_idx, sweep)` per row instead of a flat bucket list.
+- `vs6/core.py`'s `_vs6_batch` reconstructs each row via `mul_row_grouped`,
+  rebuilding the chosen partition from the same public menu.
+- `tests/test_leak.py`: its structural leak analysis is specifically about
+  the flat bucket shape, so pinned `gen.randrange` to always return 0
+  (`'flat'`) for the duration of its `ps6()` calls via a scoped
+  monkeypatch, and adjusted its bucket-unwrapping indexing for the new
+  `(choice_idx, sweep)` shape.
+- `tests/test_parity.py`: added parity checks for `partition_menu`,
+  `build_partition`, and `mul_row_grouped` across the full menu, plus a
+  ground-truth check that every menu entry reconstructs `_seal_grid`'s own
+  row target.
+- Fixed a stale `eval_level_mod` docstring (still claiming `coef=True` was
+  the default — it's `False` since entry 75 — and still claiming "no
+  per-query grouping parameter here," now false) in both `utils6.py`
+  copies.
+
+### Verified
+
+`python3 -m tests`, 3 consecutive runs: 92/92 (up from 89 — the 3 new
+parity/ground-truth checks). Also validated directly with a standalone
+probe: for a real `X`/`Y` pair, every `partition_menu` entry reconstructs
+`vsum_level_fold_mod`'s own row target bit-for-bit, and the flat
+disclosure shape matches the pre-existing `eval_level_mod(d, ...)` call
+exactly (`sweeps == [[old_style]]`).
+
+## 78. Sparse domain-hash expansion (bespoke `hash()` as append-only filler); `chunk_size` default raised to 100
+
+**Request** — "Use the bespoke hash to sparse the domain hashed values
+before it get encoded and goes into the accumulator so that way we can use
+large chunk_size. Change the chunk_size to 100 and verify and confirm if
+it make the proving somewhat more harder."
+
+`domain_hash` (SHAKE128) produces a FIXED `DOMAIN_HASH_DIGITS=78`-digit
+string regardless of chunk_size. At `chunk_size=100` (real_width=94 after
+`rand_edge_size=6`), a row would otherwise carry 78 real digits and 22
+dead, fixed `u.PAD` columns — real content only fills 78% of the row.
+
+Added `sparse_expand(digest_str, target_len, mod, k=10)` to both
+`utils6.py` copies: extends a digest string out to `target_len` digits by
+APPENDING `hash()`-derived filler digits, never transforming
+`digest_str`'s own digits. This distinction matters: entry 51 (`ms6_vibe.
+md`) replaced this exact `hash()` function with `domain_hash` for H1/H2
+specifically because `hash()` "is a fixed, public digit-substitution
+transform with no collision-resistance argument behind it." Running the
+real digest THROUGH `hash()` would have reintroduced precisely that
+unproven-assumption dependency into binding. Appending sidesteps it
+entirely: two items still need an actual `domain_hash` collision to land
+in the same row, since nothing about the filler affects which digest
+produced it — checked directly (20,000-sample random search for `hash()`
+collisions found none at `DEFAULT_MOD`/`k=10`, and the codebase's own
+`zeros`-stripping edge case requires a specific digit's table value to be
+literally 0 mod a 256-bit prime, astronomically unlikely) but the
+append-only design doesn't actually depend on that luck holding.
+
+Wired into `ms6/core.py`: `_hash_item` gained `chunk_size`/`rand_edge_size`
+/`mod` parameters and now expands both `h1s` and `h2s` to
+`_item_digest_rows(chunk_size, rand_edge_size) * real_width` digits (a new
+helper, pure function of public params, computed independently of any
+per-item measurement so there's no circularity with `_ms6_batch`'s own
+x-sizing, which naturally re-derives the same `x` from the now-longer
+measured width). Threaded through `_item_rows` and all four of its
+`Commitment` call sites (`append`/`replace`/`delete`) and `_ms6_batch`'s
+own hashing loop. `vs6/core.py`'s `_vs6_batch` mirrors this for H1 only
+(the verifier never reconstructs H2/S — only `interlace_mod`'s H1-based
+`M` needs to line up column-for-column with what the prover committed).
+
+`DEFAULT_CHUNK_SIZE` raised from 40 to 100 in both `ms6/core.py` and
+`vs6/core.py`.
+
+### Verified
+
+`python3 -m tests`, 3 consecutive runs at the new default: 92/92 (the
+sparse-expansion change is NOT a no-op even at the old default 40 —
+`real_width=34` still leaves headroom past 78 digits across 3 rows, so it
+was exercised there too). Direct round-trip probe at `chunk_size=100`:
+commit → append → replace → delete → prove → verify, plus a tampered-claim
+rejection check, all correct.
+
+### Measured — 2026-08-18
+
+`ps6` prove time, 1500-item single batch, `d=3`: flat partition,
+`chunk_size=40` -> `chunk_size=100`: 38.6ms -> 180.7ms median (~4.7x
+slower) -- tracks the combinatorial bucket count growth almost exactly
+(`x * C(chunk_size+d-1, d)`: `3 * C(42,3) = 34,440` at 40 vs
+`1 * C(102,3) = 171,700` at 100, a ~5x ratio). But a GROUPED partition
+(`row-major`, `q=10`, from entry 77's swappable fold) at `chunk_size=100`
+proves in 6.6ms -- faster than the OLD `chunk_size=40` flat baseline, not
+slower. `chunk_size=100` only "makes proving harder" if the prover ignores
+the grouping option now available to it; using it, wider chunk_size and
+cheaper proving compose rather than trade off.
+
+## 79. Multi-level (recursive) partition folding
+
+**Request** — "Currently the grouping is two level folding so add
+multi-level folding."
+
+Generalized `partition_menu`/`build_partition` (both `utils6.py` copies)
+from a single-step `(orientation, q)` choice to a RECIPE: a list of
+`(orientation, q)` steps, applied in order, each splitting every leaf
+produced by the steps before it. The identity that makes this free:
+composing affine maps stays affine at any depth -- splitting a leaf
+`A + B*(local index)` row-major-wise shifts only its offset (`A' = A +
+B*i*width`, `B' = B` unchanged); splitting it transposed-wise multiplies
+its stride (`A' = A + B*i`, `B' = B*q`). Either way the result is again a
+plain `(positions, A, B)` triple, so `eval_row_grouped`/`mul_group_hvec`/
+`mul_row_grouped` (entry 77) needed NO changes at all -- they already
+consumed flat leaf lists and have no notion of how many steps produced
+them.
+
+This is genuinely more than a re-expression of the one-level menu at
+smaller `q`: composing steps across levels reaches leaf strides no single
+`(orientation, q)` pair can produce on its own (e.g. a `row-major(10)` then
+`transposed(5)` recipe on a `chunk_size=100` row yields stride-5,
+offset-scattered leaves -- neither plain `row-major` nor `transposed` at
+any single `q` produces that shape). At `chunk_size=100` the menu grew
+from 15 single-level entries to 111 recipes, up to 3 levels deep
+(recursion at each leaf stops once its own width has no divisor `1 < q <
+width` left, so depth is bounded by `chunk_size`'s own factorization, no
+explicit cap needed) -- a materially richer disclosure-pattern space for
+the prover's per-row draw, strengthening the query-alignment defense in
+depth this feature exists for (entry 76's own honest characterization of
+it still holds: probabilistic defense-in-depth, not a closure of
+`op:multiquery`'s root cause).
+
+Wired into `ms6/core.py`'s `_finish_ps6` and `vs6/core.py`'s `_vs6_batch`
+(the `menu[choice]` lookup now passes a whole recipe list to
+`build_partition` instead of unpacking an `(orientation, q)` pair) and
+`tests/test_parity.py` (iterates recipes instead of `(orient, q)` tuples;
+added a check that `partition_menu`'s max recipe depth is actually `> 1`).
+
+### Verified
+
+Isolated probe first: all 111 `chunk_size=100` recipes (exhaustive on
+trial 1, random 8-of-111 samples on further trials) reconstruct
+`vsum_level_fold_mod`'s own row target exactly, with a partition-coverage
+sanity check (every leaf's columns union to exactly `range(chunk_size)`,
+no overlaps or gaps) — zero mismatches. `python3 -m tests`, 3 consecutive
+runs: 93/93. Real end-to-end checks outside the suite: pinned the deepest
+available `chunk_size=100` recipe (`[('row-major',2),('row-major',2),
+('row-major',5)]`, depth 3) through a full commit -> prove -> verify round
+trip (passed) and a tampered-claim rejection (correctly rejected); a
+separate multi-batch (6 batches), `workers=4`, fully-randomized-per-row-
+choice proof also verified correctly.
+
+Noted for honesty: Cauchy-product convolution is associative, so a
+multi-level recipe with the same FINAL leaf width as some single-level
+choice costs about the same to prove/verify as that single-level choice
+would -- this entry's benefit is menu diversity (defense-in-depth), not
+additional raw speed beyond what entry 78's benchmark already showed for
+grouping in general.

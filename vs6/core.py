@@ -37,7 +37,9 @@ Windows (spawn start method) -- see ms6.py's and the demo files' own notes.
 """
 from . import utils6 as u
 
-DEFAULT_CHUNK_SIZE = 40
+# Must match ms6.core.DEFAULT_CHUNK_SIZE -- see that module's own comment
+# for why 100 (sparse-expansion headroom + a richer partition_menu).
+DEFAULT_CHUNK_SIZE = 100
 DEFAULT_BATCH_SIZE = 1000
 DEFAULT_WORKERS = 1
 
@@ -332,29 +334,51 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     # claimed iset items of digit_j**q -- exactly the factor ps6 deliberately
     # left out (see ps6's _ps6_batch docstring for why).
     if vals:
-        hm = [ut.domain_hash(f"{H1_TAG}:{h1_salt}:{val}".encode()) for val in vals]
+        # ut.sparse_expand (see its own docstring, and ms6.core._hash_item's
+        # matching one) widens the raw domain_hash digest out to this
+        # batch's OWN x * real_width -- x is trusted from the caller
+        # (ms6's own published x_list, same as everywhere else in this
+        # function), so this reproduces EXACTLY the same widened H1 ms6.
+        # core._hash_item computed for the same item at commit time,
+        # without needing to independently recompute x from chunk_size/
+        # rand_edge_size alone. Only H1 needs this here -- H2/S is never
+        # reconstructed on the verifier side (see this module's own
+        # docstring), so there is no counterpart call for it.
+        real_width = chunk_size - rand_edge_size
+        target_len = x * real_width
+        hm = [ut.sparse_expand(ut.domain_hash(f"{H1_TAG}:{h1_salt}:{val}".encode()), target_len, mod)
+              for val in vals]
         M = interlace_mod(hm, x, chunk_size, q, mod, perm=perm, rand_edge_size=rand_edge_size)
     else:
         M = [[1] * chunk_size for _ in range(x)]
 
-    # mul_combinations_mod (combinatorial pairing, paired with ps6's
-    # eval_level_mod) only leaks a handful of edge columns rather than every
-    # column -- see vs6.utils6.Utils.mul_combinations_mod's docstring.
+    # mul_row_grouped (per-group Cauchy-product reconstruction, paired with
+    # ps6's eval_row_grouped) only leaks a handful of edge columns rather
+    # than every column -- same combinatorial-enumeration leak as the flat
+    # path, see vs6.utils6.Utils.mul_combinations_mod's KNOWN LEAK
+    # docstring (mul_group_hvec's own per-group calls into it inherit the
+    # same discussion, not a new leak of their own).
     #
-    # NOTE: mul_combinations_mod's signature is (N, ps, vals, mod) -- 4
-    # positional args, q already folded into `ps`/`M` upstream (ps6's own
-    # exponentiation, and interlace_mod's k1=q above) rather than reapplied
-    # here. The ex.map call below must ship exactly 4 argument lists to
-    # match; shipping a stray 5th (e.g. a [q]*len(ps) list) raises at call
-    # time only under workers>1 with more than one touched batch, which is
-    # why this exact mismatch has recurred silently in this codebase before.
+    # `ps[i]` is now (choice_idx, sweep) per row -- ps6's own disclosed
+    # index into ut.partition_menu(chunk_size) (each entry a RECIPE -- a
+    # list of (orientation, q) steps, possibly several levels deep, or []
+    # for flat) plus the per-group, per-degree sweep eval_row_grouped
+    # produced for that choice (see ms6.core._finish_ps6). The menu is
+    # public and cheap enough to recompute here (same call, same
+    # chunk_size, on both sides -- parity-checked, tests/test_parity.py)
+    # rather than transmit; only the row's own choice of index travels.
+    menu = ut.partition_menu(chunk_size)
+    partitions = [ut.build_partition(menu[choice], chunk_size)
+                  for choice, _sweep in ps]
+    sweeps = [sweep for _choice, sweep in ps]
+
     if workers and workers > 1 and len(ps) > 1:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            H = list(ex.map(ut.mul_combinations_mod,
-                             [d] * len(ps), ps, M, [mod] * len(ps)))
+            H = list(ex.map(ut.mul_row_grouped, sweeps, M, partitions,
+                             [d] * len(ps), [mod] * len(ps)))
     else:
-        H = [ut.mul_combinations_mod(d, ps[i], M[i], mod) for i in range(len(ps))]
+        H = [ut.mul_row_grouped(sweeps[i], M[i], partitions[i], d, mod) for i in range(len(ps))]
 
     h = ut.vsum_level(H, b=chunk_size)
     return _seal_hash(h)
