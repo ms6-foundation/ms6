@@ -71,11 +71,17 @@ def run(check):
     B_ = ut.h_vector_mod(3, mod_, values=vrows[1])
     L_ = 6
     M_ = [prng.randrange(1, 10) for _ in range(L_)]
-    ps_ = [[ri(100) for _ in range(40)] for _ in range(3 * (L_ - 1) + 1)]
+    # ps_'s bucket widths must match eval_level_mod's own combinatorial
+    # shape for this L_/N -- deep_prod pairs mul_combinations_mod's own
+    # (unweighted) buckets against ps_ position-for-position, so a
+    # hand-rolled fixed-width ps_ (e.g. 40 per bucket, regardless of how
+    # many combos actually land in each idx) raises a length mismatch
+    # instead of silently comparing anything.
+    ps_ = ut.eval_level_mod(3, [ri(100) for _ in range(L_)], mod_)
     parity("ms6.utils6 <-> vs6.utils6", {
         "DEFAULT_MOD": (u.DEFAULT_MOD, _vu.DEFAULT_MOD),
-        "hash": ([ut.hash(v, k) for v in ints for k in (1, 3, 10)],
-                 [_vut.hash(v, k) for v in ints for k in (1, 3, 10)]),
+        "hash": ([ut.hash(v, mod_, k) for v in ints for k in (1, 3, 10)],
+                 [_vut.hash(v, mod_, k) for v in ints for k in (1, 3, 10)]),
         "domain_hash": ([ut.domain_hash(f"tag:{v}".encode()) for v in ints],
                         [_vut.domain_hash(f"tag:{v}".encode()) for v in ints]),
         "backward_chunk": ([list(ut.backward_chunk(str(v), 12)) for v in ints],
@@ -84,8 +90,8 @@ def run(check):
                          [_vut.cell_product(c, m) for c in cnts for m in (1, 3)]),
         "cell_product_mod": ([ut.cell_product_mod(c, m, mod_) for c in cnts for m in (1, 3)],
                              [_vut.cell_product_mod(c, m, mod_) for c in cnts for m in (1, 3)]),
-        "vsum_level": ([ut.vsum_level(N, values=r, b=b) for r in vrows for N in (1, 3) for b in (1, 4)],
-                       [_vut.vsum_level(N, values=r, b=b) for r in vrows for N in (1, 3) for b in (1, 4)]),
+        "vsum_level": ([ut.vsum_level(r, b=b) for r in vrows for b in (1, 4)],
+                       [_vut.vsum_level(r, b=b) for r in vrows for b in (1, 4)]),
         "vsum_level_fold_mod": ([ut.vsum_level_fold_mod(N, mod_, values=r) for r in vrows for N in (1, 3)],
                            [_vut.vsum_level_fold_mod(N, mod_, values=r) for r in vrows for N in (1, 3)]),
         "h_vector_mod": ([ut.h_vector_mod(3, mod_, values=r) for r in vrows],

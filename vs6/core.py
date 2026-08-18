@@ -290,7 +290,7 @@ def _seal_batch(vals, chunk_size, x, d, q, mod=DEFAULT_MOD, seal_batch_size=DEFA
              for i in range(accH.rows)]
 
     H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
-    return ut.vsum_level(1, values=H, b=chunk_size)
+    return ut.vsum_level(H, b=chunk_size)
 
 
 def _get_batch_ids(indices, batch_size=DEFAULT_BATCH_SIZE):
@@ -356,7 +356,7 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     else:
         H = [ut.mul_combinations_mod(d, ps[i], M[i], mod) for i in range(len(ps))]
 
-    h = ut.vsum_level_fold_mod(d, mod=mod, values=H, b=chunk_size, global_keys=True)
+    h = ut.vsum_level(H, b=chunk_size)
     return _seal_hash(h)
 
 

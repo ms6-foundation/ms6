@@ -85,7 +85,7 @@ DEFAULT_S_MOD = DEFAULT_MOD
 DEFAULT_S_Q = 7
 
 DEFAULT_S_EXP = 3
-DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(ut.hash(9),DEFAULT_S_EXP)))
+DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(9, DEFAULT_S_MOD, DEFAULT_S_EXP)))
 
 # EDGE-COLUMN PADDING -- closes the singleton-bucket leak (see
 # mul_combinations_mod's KNOWN LEAK docstring) at the DATA level instead of
@@ -588,9 +588,9 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
-        H = [pow(ut.vsum_level(1, values=H1), d, mod) for H1 in H]
+        H = [pow(ut.vsum_level(H1), d, mod) for H1 in H]
 
-    h = ut.vsum_level_fold_mod(d, mod=mod, values=H, b=chunk_size, global_keys=True)
+    h = ut.vsum_level(H, b=chunk_size)
     return _seal_hash(h), S
 
 
@@ -856,7 +856,7 @@ def _seal_from_counts(cnt, chunk_size, d, q, mod):
              for i in range(len(cnt))]
 
     H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
-    return ut.vsum_level(1, values=H,b=chunk_size)
+    return ut.vsum_level(H,b=chunk_size)
 
 
 def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
@@ -896,7 +896,7 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     so the row-level parallelism _ms6_batch itself offers is only used
     when there's a single batch to begin with.
     """
-    hmax = pad_size+int(str(ut.hash(ut.hash(max(vals),s_exp))))
+    hmax = pad_size+int(str(ut.hash(max(vals), s_mod, s_exp)))
 
     # S's ring: shared with the H side by default -- see DEFAULT_S_MOD.
     if s_mod is None:
@@ -1143,7 +1143,7 @@ class Commitment:
         # invalidate this commitment.
         self.s_q = s_q
 
-        hmax = pad_size + int(str(ut.hash(ut.hash(max(vals), s_exp))))
+        hmax = pad_size + int(str(ut.hash(max(vals), s_mod, s_exp)))
         self.s_mod = DEFAULT_S_MOD if s_mod is None else s_mod
         if s is None:
             s = gen.randrange(hmax)

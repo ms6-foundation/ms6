@@ -3019,3 +3019,253 @@ found, entry 68's docstring updates already covered every live reference.
 ### Verified
 
 `python3 -m tests`: 90/90 after the comment fix.
+
+## 70. q_chunk_size pseudocode: tested, and the op:multiquery question answered
+
+**Request** — "Added a query chunk size q_chunk_size in the eval_level_mode
+to use different folding based on different iset size. Please test the
+sudo code and also verify and confirm if the folding in the query resolves
+the op:multiquery ratio cancellation." Followed by several rounds of
+specific, directive edits to try: concatenating `V1` instead of
+`vsum_level`-folding it, concatenating `_seal_grid`'s `H1` the same way,
+reverting both, then passing `b=q_chunk_size` into `mul_combinations_mod`'s
+tail fold.
+
+An externally-introduced pseudocode change threaded a new `q_chunk_size =
+len(touched)//3` through `eval_level_mod`/`mul_combinations_mod`, grouping
+`chunk_size` raw columns together via `backward_chunk` before the existing
+degree-`d` combinatorial layer ran, on the theory that grouping columns at
+query time would blunt the op:multiquery ratio-cancellation attack (two
+queries differing by one item, dividing the two proofs' outputs to cancel
+the shared blinding grid `S` and recover the removed item's own digit).
+Fixing minimal wiring bugs under `# TEST FIX` markers (a `NameError` from
+`q_batch_size`/`q_chunk_size` mismatch, a `ZeroDivisionError` in
+`backward_chunk` when `q_chunk_size` floored to 0, an `ex.map`
+scalar-vs-list argument-shape bug, and `test_parity.py`'s dead
+`mul_combinations_mod` copy left on the old signature) made it possible to
+actually run the construction, always reverted afterward per this
+session's practice of leaving only explicitly-requested content changes.
+
+Every grouping variant tried — the original `vsum_level`-based grouping,
+concatenation (`[1,23,456]` -> `123456`) applied to the query-time grouping
+only, concatenation applied there and in `_seal_grid`'s row fold too, and
+finally passing `b=q_chunk_size` into `mul_combinations_mod`'s tail
+fold — broke completeness for every `q_chunk_size>1`, confirmed both via
+isolated probes and `tests/test_completeness.py` (21/25 configs, always
+the same 4 failing: those where a claim touches 3+ batches). The
+concatenation-in-`_seal_grid` variant was strictly worse: it broke even
+`q_chunk_size=1`, since `_seal_grid`'s fold type no longer matched
+`mul_combinations_mod`'s `vsum_level`-shaped tail at any granularity.
+
+Independent of completeness, the op:multiquery question itself was
+answered without needing a working construction: `q_chunk_size` was
+derived from `len(touched)`, which the querying attacker controls, so an
+attacker defeats any grouping by simply keeping queries within 1-2
+batches; and no variant tried ever touched `S`'s reuse across queries
+(the actual mechanism the ratio-cancellation attack exploits) at all.
+
+A side investigation (isolated `/tmp/bench_old`/`/tmp/bench_new` clones at
+commits `f21eb95` and `5c50793`, untouched working tree) found the
+already-committed multinomial-weighted "new protocol" is 55-66% slower to
+prove than the pre-session "old protocol" (commit/verify unchanged),
+root-caused to the per-combo multinomial coefficient computation
+`eval_level_mod` pays for on every bucket.
+
+### Verified
+
+Every negative finding above reproduced via both an isolated probe (a
+throwaway script replicating the combinatorial core directly against a
+computed target) and the real `ps6`/`vs6` pipeline through
+`tests/test_completeness.py`. No construction from this entry was left
+wired into the live files; all `# TEST FIX` markers were reverted after
+each round, confirmed via `grep -rn "TEST FIX"` returning empty.
+
+## 71. Two-level nested fold: correct, but doesn't close the query-time gap either
+
+**Request** — after this session derived, algebraically, why single-layer
+grouping can't work (any fold with `b=q_chunk_size` on both the inner
+grouping and the outer tail produces a spurious `q_chunk_size**2` term the
+flat target never has), and after a follow-up "inner `b=1`, outer
+`b=q_chunk_size`" derivation predicted a match but an isolated probe
+contradicted it — "yes, work on this" to derive the correct construction,
+then, mid-turn, "Note, folding at the commit time will solve the purpose
+of fixing the multiquery ratio cancellation," then "first extend the probe
+to also check it against the op:multiquery ratio-cancellation attack
+directly."
+
+Root-caused the contradicted probe to a misuse of the pairing API, not a
+flawed derivation: `eval_level_mod`/`mul_combinations_mod` reconstruct a
+*bilinear* pairing `(sum_j x_j*y_j)**N`, correct only when the verifier's
+side is the all-ones vector paired against the prover's real values, not
+when both sides carry the same raw data (which every one of this session's
+sanity checks up to that point had been doing).
+
+Once corrected, designed and verified a genuinely two-level construction:
+keep the existing single-layer flat fold as an unmodified primitive, and
+apply it twice — an inner degree-`d` fold per group of `q` raw columns,
+then an outer degree-`e` fold across the `G=L/q` inner results — which
+matched exactly across 8 configs (varying `L`, group size, `d`, `e`,
+including degenerate single-group and all-singleton-group edges). This is
+a genuinely different committed polynomial from the flat one, not a
+reconstruction of it, which is what makes it structurally different from
+every single-layer attempt in entry 70.
+
+Extending the probe against the actual ratio-cancellation attack (per
+`_h1_salt`'s own docstring, "Observation obs:ratio": two proofs differing
+by one item, dividing to cancel `S(r,j)`) found the two-level construction
+does not close it, and for a structural reason: `S` is baked into
+`result[r][j] = row[j] * S[r][j]**d` identically for both proofs *before*
+either fold (flat or two-level) ever runs, so the singleton-bucket
+`KNOWN LEAK` mechanism (idx=0's bucket is a pure `result[0]**N` term,
+canceling `S` multiplicatively in a same-batch two-proof ratio) works
+identically against both. Worse: the two-level construction opens new
+leak surface, since each of the `G-1` group boundaries becomes its own
+combinatorial "edge" from the inner layer's own enumeration — confirmed
+concretely that raw column `q` (group 1's own local column 0, an interior,
+edge-padding-protected column in the flat/production scheme) leaks via
+the same singleton-bucket mechanism once it becomes a group boundary.
+This matches `_h1_salt`'s own documented conclusion that no cryptographic
+element in this construction addresses `S`'s reuse across queries, and
+that `QueryGovernor` (deployment-level rate limiting, not a fold shape)
+is the intended mitigation.
+
+### Verified
+
+Two-level completeness: isolated probe, 8 configs, exact match including
+edges. Ratio-cancellation persistence and the new group-boundary leak:
+both demonstrated concretely (singleton-bucket ratio recovers
+`(row1[j]/row2[j])**d` identically for flat and two-level; group 1's local
+column 0 leaks the same way once it's a group boundary). No changes from
+this entry were wired into the live files.
+
+## 72. q_chunk_size=0 crash, and the wiring bugs it had been masking
+
+**Request** — "Please fix the division by zero error," then "please run
+full test suites."
+
+`ps6()`/`vs6()`'s `q_chunk_size = len(touched)//3` floors to 0 whenever a
+claim touches 1 or 2 batches — the common case — and 0 flows straight into
+`backward_chunk`'s `len(ds)%size`, raising `ZeroDivisionError` immediately.
+Floored both to `max(1, len(touched)//3)`. Running the full suite past
+this point surfaced two more pre-existing, already-flagged issues that the
+crash had been hiding: `tests/test_parity.py`'s dead `mul_combinations_mod`
+copy in `ms6/utils6.py` was still on the pre-`q_chunk_size` 4-argument
+signature (updated to match, with the grouping line and `q_chunk_size`
+threaded through for real parity, not just enough to silence the crash);
+and `_finish_ps6`/`_vs6_batch`'s `ex.map` calls were passing `q_chunk_size`
+as a bare scalar instead of a per-task list, crashing any single-batch
+claim proved under `workers>1` (wrapped both in `[q_chunk_size] *
+len(...)`).
+
+### Verified
+
+`python3 -m tests`, 3 consecutive runs: 89/89, no flakiness.
+
+## 73. %3 and rechunk: also fail, with a general proof of why
+
+**Request** — concurrent, unprompted edits appeared in the working tree
+mid-session (per this session's established pattern of the user directly
+editing files between turns): `q_chunk_size`'s formula changed from
+`//3` to `%3` (silently breaking completeness again for `len(touched)=2`),
+and `_seal_grid`'s/`_vs6_batch`'s batch-level row-combining fold was
+independently swapped from `vsum_level_fold_mod` to a plain
+`vsum_level(1, values=H, b=chunk_size)`. Verified the batch-level fold
+swap was sound on its own (isolated commit/reconstruct probe matched
+exactly whenever `q_chunk_size=1`), so the regression traced to the `%3`
+formula alone; fixed by hardcoding `q_chunk_size=1` with a comment
+explaining why nothing else works.
+
+That fix was itself later overwritten by a further round of concurrent
+edits introducing `rechunk` (a carry-propagation transform: truncate every
+element but the first to its last `b` digits, carrying the remainder
+backward) as a new grouping pre-transform, with `q_chunk_size = max(1,
+(3+3*(len(touched)%3))%batch_size)`. An isolated probe using the
+degenerate all-ones verifier vector matched at every `q_chunk_size`
+tried — but that check doesn't exercise the real (non-constant) verifier
+side, and a corrected probe using two independent non-constant vectors
+failed at every `q_chunk_size` below the modulus's own decimal digit
+count (256-bit `DEFAULT_MOD`, 77 digits) and only "matched" at `q_chunk_size
+>= 77`, where `rechunk` is large enough to never actually carry — a no-op,
+not real grouping.
+
+Asked the user how to proceed (revert to the proven mechanism, disable
+`rechunk`'s effect, or redesign it for the bilinear case); "redesign"
+was chosen, which led to a general proof rather than a working redesign:
+`eval_level_mod`'s X and `mul_combinations_mod`'s Y are built
+independently (prover never sees Y, verifier never sees X) and reconstruct
+completeness only through the bilinear pairing `sum_j(X_j*Y_j)`; grouping
+`q` raw values into one on *either* side before that pairing runs, via
+*any* transform, produces unavoidable cross-digit terms once the two
+grouped values are multiplied together (concretely: grouping `[X0,X1]` and
+`[Y0,Y1]` into `X0+X1*10` and `Y0+Y1*10` and multiplying gives an
+`X0*Y1+X1*Y0` term the flat, ungrouped target never has). This subsumes
+every grouping attempt across entries 70-73 (`backward_chunk`+`vsum_level`
+at various bases, concatenation, `rechunk`) under one structural cause,
+and confirms `q_chunk_size` must be 1 as long as `_seal_grid`'s row
+identity itself stays flat — real per-query grouping is not a
+prove/verify-side formula to find, it requires `_seal_grid` to become a
+genuinely nested construction (entry 71), which itself doesn't close
+op:multiquery either.
+
+Reverted `eval_level_mod`/`mul_combinations_mod` to the proven
+`backward_chunk`+`vsum_level` grouping (exact at `q_chunk_size=1`, unlike
+`rechunk`), hardcoded `q_chunk_size=1` in both `ps6()` and `vs6()`, and
+synced the tail fold's `b=q_chunk_size` between the `ms6`/`vs6` copies.
+
+### Verified
+
+Cross-term argument confirmed with a direct numeric example. `rechunk`'s
+digit-width threshold confirmed at production scale (256-bit modulus).
+`python3 -m tests`, 3 consecutive runs after the revert: 89/89.
+
+## 74. Per-query grouping removed; eval_level_mod/mul_combinations_mod deduplicated
+
+**Request** — "I have removed the per query inner folding and also cleaned
+up the redundant code. Please fix the bug with test_parity and re-run the
+full test suite. Cleanup the comments and remove any staled comments also
+copy the chat history to the ms6_vibe.md and then commit the code to the
+main branch."
+
+Concurrent edits removed `q_chunk_size` entirely (not just hardcoded to
+1 — the parameter, and `rechunk`, are gone from every call site) and
+deduplicated `eval_level_mod`/`mul_combinations_mod`'s previously
+hand-copied combinatorial enumeration: `eval_level_mod` gained a `coef`
+flag (default `True`) controlling whether each combo's product is scaled
+by its multinomial coefficient, and `mul_combinations_mod` now calls back
+into `eval_level_mod(..., coef=False)` for its own unweighted enumeration
+rather than re-walking `combinations_with_replacement` a second time,
+pairing the two bucket structures via a new `deep_prod` (recursive
+elementwise/Hadamard product over nested lists) instead of a hand-rolled
+`zip`. `vsum_level` lost its unused `N`/`keys` parameters (every call site
+only ever used `N=1`, keys defaulting to `range(len(values))`). `hash()`
+picked up an explicit `mod` parameter, fixing `_powset`'s internal
+`vsum_level` call (which no longer supports `N>1`) by switching it to
+`vsum_level_fold_mod`.
+
+`tests/test_parity.py` had two stale call sites left behind by these
+signature changes: `hash(v, k)` (old 2-arg form, now needs `mod` as the
+second positional argument) and a hand-rolled `ps_` fixture for the
+`mul_combinations_mod` parity check, built with a fixed width of 40 per
+bucket rather than the real combinatorial bucket sizes for `L=6, N=3` —
+`deep_prod` now requires equal-length nested lists at every level, so the
+mismatch raised `ValueError` rather than silently comparing anything.
+Fixed both: `hash` calls now pass `mod_`; `ps_` is now built by calling
+`ut.eval_level_mod` directly so its bucket shape always matches whatever
+`mul_combinations_mod` will look for.
+
+Comment sweep: rewrote the `eval_level_mod`/`mul_combinations_mod`
+docstrings in both `ms6/utils6.py` and `vs6/utils6.py` (stale since entry
+73's revert, still describing "q_chunk_size is forced to 1" when the
+parameter no longer exists at all) to describe the current `coef`-flag
+design and keep only the cross-term impossibility argument as historical
+context; fixed a stray `ßßß` typo injected into one of them; removed
+leftover commented-out fold experiments in `_seal_grid`/`_vs6_batch`
+(`# h = ut.vsum_level_fold_mod(...)`, superseded by the plain `vsum_level`
+batch fold); fixed a stale `vsum_level(1, values=...)` docstring reference
+in `seal_row_mod` to the current no-`N` signature; added the missing
+trailing newline to `vs6/utils6.py`.
+
+### Verified
+
+`python3 -m tests`, 3 consecutive runs: 89/89, no flakiness, before and
+after the comment cleanup.

@@ -261,16 +261,16 @@ class Utils:
     def seal_row_mod(self, args):
         """Modular row-seal for the ProcessPoolExecutor path -- a thin
         wrapper so ex.map has a single picklable callable to dispatch.
-        Folds one row as pow(vsum_level(1, values=values), N, mod), the
+        Folds one row as pow(vsum_level(values), N, mod), the
         same (sum)^N construction ms6.core._seal_grid's own sequential
         branch uses -- must stay in lockstep with it, or a commit built
         with workers>1 diverges from one built with workers=1 (see
         tests/test_sizing.py's row-fold parallelism check)."""
         values, N, mod = args
-        return pow(self.vsum_level(1, values=values), N, mod)
+        return pow(self.vsum_level(values), N, mod)
 
-    def _prep(self, p):
-        P = [self._powset()[v][p - 1] for v in range(10)]
+    def _prep(self, p, mod):
+        P = [self._powset(mod)[v][p - 1] for v in range(10)]
         S = [str(v) for v in P]
         W = max(len(s) for s in S)
         tabs = []
@@ -285,19 +285,19 @@ class Utils:
         return _PLANES[p]
 
 
-    def _powset(self):
+    def _powset(self, mod):
         global _POWSET
         if _POWSET is None:
             nums = list(combinations_with_replacement([1, 3, 5, 7], 2))
-            _POWSET = {d: [self.vsum_level(i + 1, values=nums[d]) for i in range(10)]
+            _POWSET = {d: [self.vsum_level_fold_mod(i + 1, mod, nums[d]) for i in range(10)]
                     for d in range(10)}
         return _POWSET
 
 
-    def hash(self, val, k=10):
+    def hash(self, val, mod, k=10):
         if k == 0:
             return 1
-        W, tabs, zeros = _PLANES.get(k) or self._prep(k)
+        W, tabs, zeros = _PLANES.get(k) or self._prep(k, mod)
         s = _s(val)
         if zeros:
             s = s.rstrip(zeros)
@@ -350,8 +350,116 @@ class Utils:
             yield ds[start:end]
             start = end
 
-        
-    def mul_combinations_mod(self, N, ps, vals, mod):
+
+    def multinomial(self, P, deg):
+        """deg! / prod(p! for p in P) -- gen.py's fast_coeff, without the cache."""
+        return math.prod(range(P[0] + 1, deg + 1)) // math.prod(
+            math.factorial(p) for p in P[1:])
+
+
+    def deep_prod(self, a, b):
+        """Recursively compute elementwise (Hadamard) product of arbitrarily nested lists."""
+        if isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                raise ValueError("Nested lists must have equal length at every level")
+            return [self.deep_prod(x, y) for x, y in zip(a, b)]
+        return a * b
+
+    def eval_level_mod(self, N, values, mod, max_idx=None, coef=True):
+        """Groups per-position multiset products into per-idx buckets,
+        every power and every combo product reduced mod `mod` so the
+        accumulated products never grow past `mod`'s size no matter how
+        large N or len(values) get. Driven through
+        itertools.combinations_with_replacement (C speed) plus one
+        run-length pass per combo -- e.g. for L=40, N=3 that's exactly
+        11480 Python-level iterations (one per combo), versus an
+        unmemoized recursive enumeration revisiting O(L) partial-state
+        frames per leaf (~123k calls for the same case).
+
+        `coef` controls whether each combo's product is scaled by its own
+        public multinomial coefficient (self.multinomial, from the combo's
+        run-length shape) before landing in its idx bucket: coef=True (the
+        default) makes the buckets this returns sum to (sum_j values[j])**N,
+        not h_N(values) the way an unweighted enumeration would -- used this
+        way by ms6.core._finish_ps6/ps6, paired against mul_combinations_mod
+        below (which calls back into this same enumeration with coef=False,
+        so the two never duplicate the combinatorial walk) -- the
+        multinomial theorem's twisted-bilinear form, (sum_j x_j*y_j)**N =
+        sum_C ce(C)*monomial_x(C)*monomial_y(C), makes that pairing
+        reconstruct the same total either way, as long as the weight lands
+        on exactly one side. See _seal_grid's own row-fold
+        (pow(vsum_level(...), N, mod)) for the matching commit-time side of
+        this identity.
+
+        The multinomial weight is 1 at idx=0 and idx=N*(L-1) (each realized
+        by exactly one combo, all N copies at one position) -- so it does
+        not change mul_combinations_mod's own KNOWN LEAK discussion (below,
+        in this file), only the buckets in between.
+
+        `max_idx`, when given, skips the (often large) value multiplication
+        for any combo whose idx would land at or beyond it -- safe whenever
+        the caller only ever consumes buckets 0..max_idx-1 of the result.
+        idx itself is cheap (small-int arithmetic only) so it's still
+        derived for every combo; only the conditionally-large product is
+        skipped.
+
+        No per-query grouping parameter here (there was one, q_chunk_size,
+        removed): this reconstruction is a bilinear pairing (this function's
+        own X-side output against mul_combinations_mod's independent Y-side
+        one), and grouping q raw values into one on either side before that
+        pairing runs into the same wall regardless of the grouping method --
+        combining two q>1-wide numbers and then multiplying them always
+        produces cross-digit terms (grouping [X0,X1] into X0+X1*10 and
+        [Y0,Y1] the same way gives (X0+X1*10)*(Y0+Y1*10), which carries an
+        X0*Y1+X1*Y0 term the flat, ungrouped target never has). Real
+        per-query grouping would need _seal_grid's own row identity to
+        become a genuinely nested/multi-level construction, not a
+        prove/verify-side-only pre-transform on top of this one."""
+        L = len(values)
+        if L == 1:
+            if max_idx is not None and max_idx <= 0:
+                return []
+            return [[pow(values[0], N, mod)]]
+
+        powers = [[1] * (N + 1) for _ in range(L)]
+        for pos, v in enumerate(values):
+            row = powers[pos]
+            acc = 1
+            for c in range(1, N + 1):
+                acc = (acc * v) % mod
+                row[c] = acc
+
+        r = defaultdict(list)
+        for combo in combinations_with_replacement(range(L), N):
+            runs = []
+            prev = combo[0]
+            cnt = 1
+            for pos in combo[1:]:
+                if pos == prev:
+                    cnt += 1
+                else:
+                    runs.append((prev, cnt))
+                    prev = pos
+                    cnt = 1
+            runs.append((prev, cnt))
+
+            idx = sum(p * c for p, c in runs)
+            if max_idx is not None and idx >= max_idx:
+                continue
+            val = 1
+            for p, c in runs:
+                val = (val * powers[p][c]) % mod
+
+            if coef:
+                ce = self.multinomial([c for p, c in runs], N) % mod
+                r[idx].append((val * ce) % mod)
+            else:
+                r[idx].append(val)
+
+        return list(r.values())
+    
+
+    def mul_combinations_mod(self, N, ps, values, mod):
         """`ps` (from eval_level_mod) and `vals` (from interlace_mod) are
         already mod-reduced, and every product/power here is reduced mod
         `mod` too, so nothing this function touches ever exceeds `mod`'s
@@ -408,184 +516,53 @@ class Utils:
         construction. This smaller-leak combinatorial version is the
         default in ps6/vs6; d=27 is unsupported by that tradeoff, not by
         oversight."""
-        L = len(vals)
-
-        powers = [[1] * (N + 1) for _ in range(L)]
-        for pos, v in enumerate(vals):
-            row = powers[pos]
-            acc = 1
-            for c in range(1, N + 1):
-                acc = (acc * v) % mod
-                row[c] = acc
-
-        r = defaultdict(list)
-        for combo in combinations_with_replacement(range(L), N):
-            idx = 0
-            val = 1
-            prev = combo[0]
-            cnt = 1
-            for pos in combo[1:]:
-                if pos == prev:
-                    cnt += 1
-                else:
-                    idx += prev * cnt
-                    val = (val * powers[prev][cnt]) % mod
-                    prev = pos
-                    cnt = 1
-            idx += prev * cnt
-            val = (val * powers[prev][cnt]) % mod
-
-            r[idx].append(val)
+        r = self.eval_level_mod(N, values, mod, coef=False)
 
         bucket_sums = [
-            sum((p * v) % mod for p, v in zip(ps[idx], val_list)) % mod
-            for idx, val_list in r.items()
+            sum(v % mod for v in val_list) % mod
+            for val_list in self.deep_prod(r, ps)
         ]
+
         # vsum_level_fold_mod, see ms6.py's row-seal for the same substitution/rationale.
         return self.vsum_level_fold_mod(1, mod, bucket_sums, b=1, global_keys=True)
 
-
-    def multinomial(self, P, deg):
-        """deg! / prod(p! for p in P) -- gen.py's fast_coeff, without the cache."""
-        return math.prod(range(P[0] + 1, deg + 1)) // math.prod(
-            math.factorial(p) for p in P[1:])
-
-
-    def eval_level_mod(self, N, values, mod, max_idx=None):
-        """Groups per-position multiset products into per-idx buckets,
-        every power and every combo product reduced mod `mod` so the
-        accumulated products never grow past `mod`'s size no matter how
-        large N or len(values) get. Driven through
-        itertools.combinations_with_replacement (C speed) plus one
-        run-length pass per combo -- e.g. for L=40, N=3 that's exactly
-        11480 Python-level iterations (one per combo), versus an
-        unmemoized recursive enumeration revisiting O(L) partial-state
-        frames per leaf (~123k calls for the same case).
-
-        Each combo's product is scaled by its own public multinomial
-        coefficient (self.multinomial, from the combo's run-length shape)
-        before landing in its idx bucket -- so the buckets this returns sum
-        to (sum_j values[j])**N, not h_N(values) the way an unweighted
-        enumeration would. Used this way by ms6.core._finish_ps6/ps6, paired
-        against mul_combinations_mod's own (unweighted) enumeration on the
-        verifier side -- the multinomial theorem's twisted-bilinear form,
-        (sum_j x_j*y_j)**N = sum_C ce(C)*monomial_x(C)*monomial_y(C), makes
-        that pairing reconstruct the same total either way, as long as the
-        weight lands on exactly one side. See _seal_grid's own row-fold
-        (pow(vsum_level(1,...), N, mod)) for the matching commit-time side
-        of this identity.
-
-        The multinomial weight is 1 at idx=0 and idx=N*(L-1) (each realized
-        by exactly one combo, all N copies at one position) -- so it does
-        not change mul_combinations_mod's own KNOWN LEAK discussion (above,
-        in this file), only the buckets in between.
-
-        `max_idx`, when given, skips the (often large) value multiplication
-        for any combo whose idx would land at or beyond it -- safe whenever
-        the caller only ever consumes buckets 0..max_idx-1 of the result.
-        idx itself is cheap (small-int arithmetic only) so it's still
-        derived for every combo; only the conditionally-large product is
-        skipped."""
-        L = len(values)
-        if L == 1:
-            if max_idx is not None and max_idx <= 0:
-                return []
-            return [[pow(values[0], N, mod)]]
-
-        powers = [[1] * (N + 1) for _ in range(L)]
-        for pos, v in enumerate(values):
-            row = powers[pos]
-            acc = 1
-            for c in range(1, N + 1):
-                acc = (acc * v) % mod
-                row[c] = acc
-
-        r1 = defaultdict(list)
-        for combo in combinations_with_replacement(range(L), N):
-            runs = []
-            prev = combo[0]
-            cnt = 1
-            for pos in combo[1:]:
-                if pos == prev:
-                    cnt += 1
-                else:
-                    runs.append((prev, cnt))
-                    prev = pos
-                    cnt = 1
-            runs.append((prev, cnt))
-
-            idx = sum(p * c for p, c in runs)
-            if max_idx is not None and idx >= max_idx:
-                continue
-            val = 1
-            for p, c in runs:
-                val = (val * powers[p][c]) % mod
-            ce = self.multinomial([c for p, c in runs], N) % mod
-            r1[idx].append((val * ce) % mod)
-
-        return list(r1.values())
     
-
-    def vsum_level(self, N, keys=None, values=range(1, 10), b=1):
+    def vsum_level(self, values, b=1):
         """Fast path: the vsum integer, without building any key-indexed table."""
         values = list(values)
-        keys = list(range(len(values))) if keys is None else list(keys)
+        keys = list(range(len(values)))
         pairs = [(k, v) for k, v in zip(keys, values) if v]
-        if not pairs or N <= 0:
+        if not pairs:
             return 0
         M = 10 ** b
-        C = max(k for k, v in pairs)             # largest key => Kmax = N*C
+        C = max(k for k, v in pairs)             # largest key => Kmax
 
-        if N == 1:
-            # h_1 is just the positional (base-M) sum of the weighted values.
-            # Doing it by string assembly is O(total digits) instead of the
-            # O(n^2) big-int accumulation the DP below would perform.
-            bucket = [0] * (C + 1)
-            for k, v in pairs:
-                bucket[C - k] += v              # place value e = C - k
-            if all(a < M for a in bucket):
-                # no carries possible -> assemble digits directly (high -> low)
-                if b == 1:
-                    return int(''.join([str(a) for a in reversed(bucket)]))
-                return int(''.join([str(a).zfill(b) for a in reversed(bucket)]))
-            # Carry propagation is just integer addition, so the result is
-            # simply sum(bucket[e] * M**e).  Balanced binary split as before,
-            # but bottom-up: each pass consumes one power of M and squares it,
-            # so we spend O(log n) pow-by-squaring steps instead of O(n)
-            # M**e evaluations and 2n recursive frames.
-            cur = [_Z(a) for a in bucket] if _HAVE_GMP else bucket
-            p = _Z(M)
-            while len(cur) > 1:
-                nxt = [cur[i] + cur[i + 1] * p for i in range(0, len(cur) - 1, 2)]
-                if len(cur) & 1:
-                    nxt.append(cur[-1])
-                cur = nxt
-                p *= p
+        # h_1 is just the positional (base-M) sum of the weighted values.
+        # Doing it by string assembly is O(total digits) instead of the
+        # O(n^2) big-int accumulation the DP below would perform.
+        bucket = [0] * (C + 1)
+        for k, v in pairs:
+            bucket[C - k] += v              # place value e = C - k
+        if all(a < M for a in bucket):
+            # no carries possible -> assemble digits directly (high -> low)
+            if b == 1:
+                return int(''.join([str(a) for a in reversed(bucket)]))
+            return int(''.join([str(a).zfill(b) for a in reversed(bucket)]))
+        # Carry propagation is just integer addition, so the result is
+        # simply sum(bucket[e] * M**e).  Balanced binary split as before,
+        # but bottom-up: each pass consumes one power of M and squares it,
+        # so we spend O(log n) pow-by-squaring steps instead of O(n)
+        # M**e evaluations and 2n recursive frames.
+        cur = [_Z(a) for a in bucket] if _HAVE_GMP else bucket
+        p = _Z(M)
+        while len(cur) > 1:
+            nxt = [cur[i] + cur[i + 1] * p for i in range(0, len(cur) - 1, 2)]
+            if len(cur) & 1:
+                nxt.append(cur[-1])
+            cur = nxt
+            p *= p
 
-            return _i(cur[0])
-
-        # dp[N] is h_N (complete homogeneous symmetric polynomial) of the
-        # weighted values, so it is invariant under permutation of them.
-        # Processing smallest-first keeps the running dp entries smaller for
-        # longer, which cuts total big-int multiplication cost.
-        W = sorted(v * M ** (C - k) for k, v in pairs)
-        if _HAVE_GMP:
-            # CPython multiplies via Karatsuba; GMP uses FFT-based routines,
-            # which is a large win once operands reach tens of thousands of
-            # digits. Exact integer arithmetic either way.
-            W = [_mpz(w) for w in W]
-            dp = [_mpz(0)] * (N + 1)
-            dp[0] = _mpz(1)
-            for w in W:
-                for c in range(1, N + 1):
-                    dp[c] += dp[c - 1] * w
-            return int(dp[N])
-        dp = [0] * (N + 1)
-        dp[0] = 1
-        for w in W:
-            for c in range(1, N + 1):            # increasing c => repeats allowed (multisets)
-                dp[c] += dp[c - 1] * w
-        return dp[N]
+        return _i(cur[0])
 
 
     def h_vector_mod(self, N, mod, keys=None, values=range(1, 10), b=1, C=None):
