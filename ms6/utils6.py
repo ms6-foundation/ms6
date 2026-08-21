@@ -267,6 +267,7 @@ class Utils:
         with workers>1 diverges from one built with workers=1 (see
         tests/test_sizing.py's row-fold parallelism check)."""
         values, N, mod = args
+        values = [sum(hv) % mod for hv in self.eval_level_mod(N, values, mod, coef=True)]
         return int(self.vsum_level_fold_mod(N, mod, values, global_keys=True))
 
     def _prep(self, p, mod):
@@ -412,7 +413,7 @@ class Utils:
             return [self.deep_prod(x, y) for x, y in zip(a, b)]
         return a * b
 
-    def eval_level_mod(self, N, values, mod, max_idx=None, coef=False):
+    def eval_level_mod(self, N, values, mod, max_idx=None, coef=False, keyed=False):
         """Groups per-position multiset products into per-idx buckets,
         every power and every combo product reduced mod `mod` so the
         accumulated products never grow past `mod`'s size no matter how
@@ -429,11 +430,15 @@ class Utils:
         the buckets this returns sum to (sum_j values[j])**N, not h_N(values)
         the way the default (coef=False) unweighted enumeration does -- the
         multinomial theorem's twisted-bilinear form, (sum_j x_j*y_j)**N =
-        sum_C ce(C)*monomial_x(C)*monomial_y(C), would make a coef=True/
-        coef=False pairing reconstruct that (sum)**N total, if anything
-        still paired the two that way; nothing in this codebase does
-        (see below) -- coef=True is unused by ps6/vs6 today, kept for
-        anyone building a different pairing on top of this enumeration.
+        sum_C ce(C)*monomial_x(C)*monomial_y(C), is exactly what a coef=True/
+        coef=False pairing reconstructs (see mul_combinations_mod's own
+        coef= paragraph, and mul_combinations_bucket_vec below, which keep
+        that pairing's result as a vector instead of collapsing it) --
+        _seal_grid's own two-stage row-seal is coef=True's real, live use:
+        H'=H*S^d gets bucket-summed via eval_level_mod(d, H1, mod,
+        coef=True) before the outer degree-d fold. coef=False (the default)
+        is what ps6/vs6's Y-side disclosure (eval_row_grouped below) always
+        used and still does -- see the next paragraph.
 
         The multinomial weight is 1 at idx=0 and idx=N*(L-1) (each realized
         by exactly one combo, all N copies at one position) -- so it does
@@ -450,16 +455,22 @@ class Utils:
         ms6.core._finish_ps6/ps6 call this (coef=False, the default) via
         eval_row_grouped below, per group and per degree 1..d (or once, at
         degree d only, when the chosen partition is a single group -- see
-        eval_row_grouped's own docstring) -- paired against
-        mul_combinations_mod's/mul_group_hvec's independent Y-side
-        reconstruction on the verifier side. The row's true target is
-        _seal_grid's h_d(H1) (ut.vsum_level_fold_mod(d, mod, values=H1,
-        global_keys=True), NOT (sum)**N/pow(vsum_level(...), N, mod) -- see
-        ms6_vibe.md for why that construction was replaced), which is
-        exactly what eval_row_grouped/mul_row_grouped's Cauchy-product
-        machinery reconstructs regardless of grouping (see
-        h_vector_mod/fold_h_vector_mod's own docstrings for the identity
-        that makes that grouping-invariance exact, not approximate).
+        eval_row_grouped's own docstring) -- the SAME disclosure serves two
+        different verifier-side reconstructions, chosen independently of
+        anything this function or eval_row_grouped does: mul_row_grouped
+        (paired against mul_combinations_mod/mul_group_hvec) reconstructs
+        the plain h_d(H1) target; mul_row_grouped_two_stage (paired against
+        mul_combinations_bucket_vec/mul_group_bucket_vec, coef=True on the
+        verifier's own X-side) reconstructs _seal_grid's actual, currently
+        shipped row-seal target instead -- the two-stage fold (bucket-sum
+        via eval_level_mod(d,H1,mod,coef=True), then a second degree-d
+        vsum_level_fold_mod, NOT (sum)**N/pow(vsum_level(...), N, mod) --
+        see ms6_vibe.md for why that construction was replaced). Both
+        reconstructions are exact regardless of grouping (see
+        h_vector_mod/fold_h_vector_mod's own docstrings for the h_d
+        identity, and mul_row_grouped_two_stage's own docstring for the
+        binomial-weighted analogue that makes the two-stage target
+        grouping-invariant too).
 
         A per-query GROUPING parameter now exists at the row level (see
         partition_menu/build_partition/eval_row_grouped below) -- but it
@@ -475,12 +486,27 @@ class Utils:
         block getting its OWN full eval_level_mod/mul_combinations_mod
         pairing at every degree up to d, then Cauchy-products the blocks'
         own h-vectors together -- an exact identity, not a pre-transform on
-        top of this function's own per-value arithmetic."""
+        top of this function's own per-value arithmetic.
+
+        `keyed`, when True, returns {idx: [bucket values]} instead of the
+        default list(r.values()) -- the same buckets, in the same content,
+        just with their idx label attached instead of discarded. Every
+        EXISTING caller relies only on list(r.values())'s own insertion
+        order lining up combo-for-combo between an X-side and a Y-side
+        generated the same way (deep_prod's pairing needs no explicit idx
+        at all for that). keyed=True exists for mul_combinations_bucket_vec
+        (below), which DOES need the idx labels -- reconstructing a GROUP's
+        own two-stage bucket vector (see mul_group_bucket_vec's own
+        docstring) requires remapping each bucket's idx from the group's
+        local position numbering into the row's shared, true-column one
+        before combining it with sibling groups', which is only possible
+        if the idx survives past this function's own return."""
         L = len(values)
         if L == 1:
             if max_idx is not None and max_idx <= 0:
-                return []
-            return [[pow(values[0], N, mod)]]
+                return {} if keyed else []
+            val = pow(values[0], N, mod)
+            return {0: [val]} if keyed else [[val]]
 
         powers = [[1] * (N + 1) for _ in range(L)]
         for pos, v in enumerate(values):
@@ -517,10 +543,10 @@ class Utils:
             else:
                 r[idx].append(val)
 
-        return list(r.values())
-    
+        return dict(r) if keyed else list(r.values())
 
-    def mul_combinations_mod(self, N, ps, values, mod, b=1):
+
+    def mul_combinations_mod(self, N, ps, values, mod, b=1, coef=False):
         """`ps` (from eval_level_mod) and `vals` (from interlace_mod) are
         already mod-reduced, and every product/power here is reduced mod
         `mod` too, so nothing this function touches ever exceeds `mod`'s
@@ -588,16 +614,92 @@ class Utils:
         codebase's "value as the base of a public power mod a prime"
         construction. This smaller-leak combinatorial version is the
         default in ps6/vs6; d=27 is unsupported by that tradeoff, not by
-        oversight."""
-        r = self.eval_level_mod(N, values, mod)
+        oversight.
+
+        `coef`, when True, folds this function's own X-side (`values`)
+        with the same multinomial-coefficient weighting eval_level_mod's
+        own coef=True branch applies, and collapses the paired result via
+        a full degree-N fold (vsum_level_fold_mod(N, ...)) instead of the
+        default degree-1 weighted sum. This is the verifier-side
+        counterpart to a two-stage row-seal (fold H' once with coef=True,
+        then fold THAT result again, degree N both times -- see
+        ms6.core._seal_grid): pairing a coef=True X-side against ps's own
+        coef=False Y-side (both raw, unsummed, matched combo-for-combo by
+        deep_prod, same as always) fully recovers the SAME inner
+        bucket-summed vector the coef=True commit-side fold produces --
+        ce(C) lands on the pairing exactly once per combo either way, see
+        eval_level_mod's own "twisted-bilinear form" paragraph. Once that
+        inner vector is reconstructed it is fully public (built from
+        `values`, known to the verifier, and ps, already disclosed), so
+        the outer fold needs no further secret-splitting -- an ordinary
+        vsum_level_fold_mod(N, ...) call on it, not another bilinear
+        pairing. coef=False (the default) preserves every existing call
+        site's own behaviour exactly, including the degree-1 outer
+        collapse. Verified: 20/20 randomized (L, N) trials matching
+        _seal_grid's own two-stage construction exactly (ms6_vibe.md).
+
+        A wrong `N` (the caller passing the wrong degree, e.g. vs6() given
+        a wrong `d`) reshapes `r`'s own bucket structure relative to `ps`
+        (`ps` was sized by the PROVER's true degree at disclosure time) --
+        deep_prod's own equal-length check catches that as a ValueError,
+        re-raised here as IndexError so it lands in the same "reconstruction
+        itself breaks, never a silent True" bucket vs6()'s own docstring
+        already documents for a wrong d (AssertionError low / IndexError
+        high) -- this is that same contract's low-level enforcement point,
+        not a new failure mode."""
+        r = self.eval_level_mod(N, values, mod, coef=coef)
+
+        try:
+            paired = self.deep_prod(r, ps)
+        except ValueError as e:
+            raise IndexError(
+                f"mul_combinations_mod: reconstructed sweep shape does not "
+                f"match disclosed ps (wrong degree/params?) -- {e}") from e
 
         bucket_sums = [
             sum(v % mod for v in val_list) % mod
-            for val_list in self.deep_prod(r, ps)
+            for val_list in paired
         ]
 
         # vsum_level_fold_mod, see ms6.py's row-seal for the same substitution/rationale.
-        return self.vsum_level_fold_mod(1, mod, bucket_sums, b=b, global_keys=True)
+        outer_N = N if coef else 1
+        return self.vsum_level_fold_mod(outer_N, mod, bucket_sums, b=b, global_keys=True)
+
+
+    def mul_combinations_bucket_vec(self, N, ps, values, mod, coef=True):
+        """Same bilinear reconstruction as mul_combinations_mod's own
+        coef=True path (X-side eval_level_mod(coef=True) paired against
+        ps's own coef=False Y-side, combo-for-combo via deep_prod), but
+        returns the reconstructed {idx: bucket_sum} dict itself instead of
+        collapsing it through the outer vsum_level_fold_mod(N, ...) fold --
+        this is STAGE 1 alone, kept as a vector rather than folded to a
+        scalar, because mul_group_bucket_vec/convolve_bucket_vecs_mod
+        (below) need to combine one GROUP's own stage-1 vector with
+        sibling groups' before any outer fold runs (see
+        mul_row_grouped_two_stage's own docstring for why the outer fold
+        can only happen once, on the fully-assembled row).
+
+        idx here is still in the CALLER's own local position numbering
+        (0..len(values)-1) -- mul_group_bucket_vec is what remaps it into
+        the row's shared, true-column numbering; this function stays
+        agnostic to where its `values`/`ps` came from, same as
+        mul_combinations_mod itself."""
+        r_keyed = self.eval_level_mod(N, values, mod, coef=coef, keyed=True)
+        idx_list = list(r_keyed.keys())
+        r = list(r_keyed.values())
+
+        try:
+            paired = self.deep_prod(r, ps)
+        except ValueError as e:
+            raise IndexError(
+                f"mul_combinations_bucket_vec: reconstructed sweep shape "
+                f"does not match disclosed ps (wrong degree/params?) -- "
+                f"{e}") from e
+
+        return {
+            idx: sum(v % mod for v in val_list) % mod
+            for idx, val_list in zip(idx_list, paired)
+        }
 
 
     def partition_menu(self, chunk_size):
@@ -708,22 +810,85 @@ class Utils:
         leaves = [(list(range(chunk_size)), 0, 1)]
         for orientation, q in recipe:
             next_leaves = []
-            for positions, A, B in leaves:
-                w = len(positions)
-                if w % q != 0:
-                    raise ValueError(
-                        f"recipe step q={q} does not evenly divide current leaf width {w}")
-                g = w // q
-                if orientation == 'row-major':
-                    for i in range(q):
-                        next_leaves.append((positions[i * g:(i + 1) * g], A + B * (i * g), B))
-                elif orientation == 'transposed':
-                    for i in range(q):
-                        next_leaves.append((positions[i::q], A + B * i, B * q))
-                else:
-                    raise ValueError(f"unknown partition orientation: {orientation!r}")
+            for leaf in leaves:
+                next_leaves.extend(self._split_leaf(leaf, orientation, q))
             leaves = next_leaves
         return leaves
+
+
+    def _split_leaf(self, leaf, orientation, q):
+        """One (orientation, q) split applied to a single (positions, A, B)
+        leaf -- the same affine composition build_partition's own loop uses,
+        factored out so build_targeted_partition can apply it to ONE leaf
+        without re-deriving the row-major/transposed math. See
+        build_partition's own docstring for the derivation of why this
+        composition stays affine at any depth."""
+        positions, A, B = leaf
+        w = len(positions)
+        if w % q != 0:
+            raise ValueError(
+                f"split step q={q} does not evenly divide leaf width {w}")
+        g = w // q
+        if orientation == 'row-major':
+            return [(positions[i * g:(i + 1) * g], A + B * (i * g), B) for i in range(q)]
+        elif orientation == 'transposed':
+            return [(positions[i::q], A + B * i, B * q) for i in range(q)]
+        else:
+            raise ValueError(f"unknown partition orientation: {orientation!r}")
+
+
+    def build_targeted_partition(self, base_partition, targets):
+        """Split a FEW leaves of an already-built partition one level
+        deeper, leaving every other leaf untouched -- a cheap, TARGETED
+        counterpart to partition_menu/build_partition's own uniform (every
+        leaf split the same way, every level) recipes.
+
+        Mathematically this needs nothing new: Lemma cauchy's disjoint-
+        union identity and the companion Meta-Series paper's affine
+        correction theorem (see build_partition's own docstring) both hold
+        for a partition of a row's columns into groups of ANY offset,
+        stride, and size -- non-uniform leaf widths were always sound, the
+        uniform-recipe menu in partition_menu was a generation choice, not
+        a mathematical requirement. mul_group_hvec/mul_row_grouped (vs6)
+        already process each leaf independently by its own (positions, A,
+        B), so the verifier side needs no changes at all to reconstruct a
+        row built this way -- only the prover-side generation, and what
+        gets disclosed to rebuild it, are new.
+
+        base_partition -- a build_partition(recipe, chunk_size) result (or
+        any list of (positions, A, B) leaves).
+
+        targets -- a list of (leaf_idx, orientation, q): for each entry,
+        leaf_idx indexes into base_partition, and that leaf is replaced (in
+        place, same position in the returned list) by its own q-way
+        (orientation, q) split via _split_leaf. Leaves not named in
+        `targets` are returned unchanged. Splitting the SAME leaf_idx twice
+        is not supported (targets must name distinct leaves); splitting a
+        leaf that a prior target step already replaced is not supported
+        either -- both would need a leaf_idx renumbering scheme this
+        function deliberately keeps out of, since the caller (ms6.core)
+        only ever needs one flat round of targeting, not recursive
+        targeting-of-targets.
+
+        Returns a new list of leaves, same length as base_partition plus
+        (q-1) for every targeted leaf, in an order that still partitions
+        {0,...,chunk_size-1} without overlap or gap (each target's q new
+        leaves take the place its one old leaf occupied, in order)."""
+        seen = set()
+        result = []
+        by_idx = {}
+        for leaf_idx, orientation, q in targets:
+            if leaf_idx in seen:
+                raise ValueError(f"leaf_idx {leaf_idx} targeted more than once")
+            seen.add(leaf_idx)
+            by_idx[leaf_idx] = (orientation, q)
+        for i, leaf in enumerate(base_partition):
+            if i in by_idx:
+                orientation, q = by_idx[i]
+                result.extend(self._split_leaf(leaf, orientation, q))
+            else:
+                result.append(leaf)
+        return result
 
 
     def eval_row_grouped(self, d, X_row, mod, partition):
@@ -858,6 +1023,136 @@ class Utils:
             hv = self.mul_group_hvec(sweep, Yg, A, B, len(positions), C_global, d, mod)
             acc = hv if acc is None else self.convolve_h_vectors_mod(acc, hv, d, mod)
         return acc[d]
+
+
+    def mul_group_bucket_vec(self, sweep, Y_group, A, B, d, mod):
+        """Verifier-side reconstruction of one group's own TWO-STAGE bucket
+        vector at every degree 0..d -- the coef=True counterpart of
+        mul_group_hvec (which reconstructs the group's plain h-vector for
+        the original, non-two-stage h_d target). Returns {0: {0: 1}, 1:
+        {idx: val, ...}, ..., d: {...}}.
+
+        `sweep` is eval_row_grouped's own per-group disclosure (unchanged
+        by any of this -- see mul_row_grouped_two_stage's own docstring for
+        why the SAME disclosure serves both targets): sweep[i-1] =
+        eval_level_mod(i, oset_group, mod), coef=False, for i=1..d.
+
+        For each degree i, mul_combinations_bucket_vec(i, sweep[i-1],
+        Y_group, mod, coef=True) reconstructs bucket_vec(M_group *
+        result_group, i) -- see that function's own docstring -- but keyed
+        by the group's own LOCAL position numbering (0..q_local-1), since
+        that's what both eval_level_mod calls that produced it used.
+
+        A column at group-local position p sits at true row column A+B*p,
+        so a degree-i combo's true idx is i*A + B*local_idx (each of the i
+        picks contributes one +A offset and B*(its own local position); the
+        A term is picked up i times, once per pick, and the B*local_idx sum
+        across picks is exactly local_idx by eval_level_mod's own idx
+        definition) -- remapping every bucket's key this way is enough to
+        make this group's own bucket vector directly combinable (via
+        convolve_bucket_vecs_mod) with any other group's, in the row's one
+        shared idx space -- no separate multiplicative correction factor
+        like mul_group_hvec's own `correction` is needed here, because
+        STAGE1's bucket vector already carries positional information
+        explicitly in its idx keys (unlike a group's plain h_i scalar,
+        which carries none, hence mul_group_hvec's own fixup). Verified
+        against real partition_menu leaves, both row-major and transposed,
+        single- and multi-level recipes, and the full bilinear (claimed/
+        oset) split (ms6_vibe.md)."""
+        out = {0: {0: 1}}
+        for i in range(1, d + 1):
+            local_bv = self.mul_combinations_bucket_vec(i, sweep[i - 1], Y_group, mod, coef=True)
+            out[i] = {i * A + B * local_idx: v for local_idx, v in local_bv.items()}
+        return out
+
+
+    def convolve_bucket_vecs_mod(self, acc, gvec, d, mod):
+        """Binomial-weighted Cauchy product of two groups' own bucket-vec
+        dicts (each {degree: {idx: val}} for degree 0..d) -- the STAGE1
+        counterpart of convolve_h_vectors_mod, which combines plain h-
+        vectors with NO binomial weight (h_k(A u B) = sum_i h_i(A)h_{k-i}(B)
+        has none). This one needs C(k,i): bucket_vec(A u B, k) sums the
+        coefficients of g_{A u B}(x)^k = (g_A(x)+g_B(x))^k, whose binomial
+        expansion is sum_i C(k,i) g_A(x)^i g_B(x)^{k-i} -- each term a
+        POLYNOMIAL PRODUCT (coefficients convolve, i.e. idx keys ADD) of
+        that degree's own bucket vectors, weighted by C(k,i). Verified
+        exactly against a flat (non-grouped) eval_level_mod(k,...,coef=True)
+        call across 2-way and 4-way group splits, several group sizes and
+        degrees (ms6_vibe.md)."""
+        out = {0: {0: 1}}
+        for k in range(1, d + 1):
+            combined = {}
+            for i in range(k + 1):
+                j = k - i
+                c = math.comb(k, i)
+                for ia, va in acc.get(i, {}).items():
+                    for ib, vb in gvec.get(j, {}).items():
+                        key = ia + ib
+                        combined[key] = (combined.get(key, 0) + c * va * vb) % mod
+            out[k] = combined
+        return out
+
+
+    def mul_row_grouped_two_stage(self, sweeps, Y_row, partition, d, mod):
+        """Verifier-side row-level reconstruction for the TWO-STAGE fold
+        (_seal_grid's H'=H*S^d -> eval_level_mod(d,...,coef=True) bucket-sum
+        -> vsum_level_fold_mod(d,...) construction -- see ms6_vibe.md),
+        the coef=True/group-composed counterpart of mul_row_grouped (which
+        reconstructs the original, non-two-stage h_d(row) target).
+
+        Takes the exact same disclosure eval_row_grouped already produces
+        for the non-two-stage target -- STAGE1's Y-side requirement
+        (coef=False, raw, per group per degree 1..d) doesn't change with
+        what the X-side does with it (see mul_combinations_bucket_vec's own
+        docstring) -- so no prover-side change was needed to support this;
+        only this reconstruction path is new.
+
+        Combines every group's own bucket vector (mul_group_bucket_vec) via
+        convolve_bucket_vecs_mod's binomial-weighted Cauchy product into the
+        FULL ROW's own bucket vector at degree d, then applies the same
+        outer STAGE2 fold (vsum_level_fold_mod(d, mod, ..., global_keys=
+        True)) _seal_grid's own flat construction uses -- STAGE2 is an
+        ordinary (non-bilinear) DP pass, always cheap regardless of
+        grouping, so there is nothing left to decompose once the row's
+        bucket vector is fully assembled; only STAGE1 (the combinatorial
+        blow-up) benefits from grouping.
+
+        The assembled bucket vector's values MUST be sorted by ascending
+        idx before the outer fold: vsum_level_fold_mod(global_keys=True)
+        weights entries by their LIST POSITION, not by their idx label, and
+        a flat eval_level_mod(d,...,coef=True) call happens to already
+        yield its buckets in ascending-idx order (a side effect of how
+        combinations_with_replacement visits combos, not a documented
+        contract) -- the group-assembled dict has no reason to come out in
+        that order on its own, so this sorts explicitly rather than relying
+        on incidental dict-insertion order.
+
+        SINGLE-GROUP SPECIAL CASE: mirrors mul_row_grouped's own -- with
+        only one group (e.g. the 'flat' recipe) there is nothing to
+        convolve against, so this reconstructs bucket_vec(row, d) directly
+        via one mul_combinations_bucket_vec call, remapped by the group's
+        own (A, B) (A=0, B=1 for 'flat' -- a no-op remap), then folds.
+        Costs exactly what the pre-grouped flat two-stage bypass always
+        did.
+
+        Verified bit-identical to a flat (non-grouped) two-stage
+        computation over the same row, across row-major, transposed, and
+        nested recipes, and the full bilinear claimed/oset split
+        (ms6_vibe.md)."""
+        if len(partition) == 1:
+            positions, A, B = partition[0]
+            Yg = [Y_row[j] for j in positions]
+            bv = self.mul_combinations_bucket_vec(d, sweeps[0][0], Yg, mod, coef=True)
+            bv = {d * A + B * local_idx: v for local_idx, v in bv.items()}
+        else:
+            acc = {0: {0: 1}}
+            for sweep, (positions, A, B) in zip(sweeps, partition):
+                Yg = [Y_row[j] for j in positions]
+                gvec = self.mul_group_bucket_vec(sweep, Yg, A, B, d, mod)
+                acc = self.convolve_bucket_vecs_mod(acc, gvec, d, mod)
+            bv = acc[d]
+        vals = [bv[k] for k in sorted(bv)]
+        return self.vsum_level_fold_mod(d, mod, vals, global_keys=True)
 
 
     def vsum_level(self, values, b=1):

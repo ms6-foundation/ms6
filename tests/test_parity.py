@@ -52,7 +52,7 @@ def run(check):
         lv = [_seal_hash(ri(200)) for _ in range(n_)]
         seal_cases[f"_seal_batch(n={n_},sbs={sbs_})"] = (
             _seal_batch(lv, 12, 2, 3, 10, mod_, sbs_), _V._seal_batch(lv, 12, 2, 3, 10, mod_, sbs_))
-    pp = make_params(3, 10, 12, 5, mod_, 7)
+    pp = make_params(10, 12, 5, mod_, 7)
     parity("ms6.py <-> vs6.py", {
         "chunk_of": ([chunk_of(v, 3, 12) for v in svals],
                      [_V.chunk_of(v, 3, 12) for v in svals]),
@@ -157,6 +157,47 @@ def run(check):
           all(ut.mul_row_grouped(ut.eval_row_grouped(D_, X_row, mod_, ut.build_partition(recipe, CS_)),
                                   Y_row, ut.build_partition(recipe, CS_), D_, mod_) == target_
               for recipe in menu_))
+
+    # -- TARGETED fold (build_targeted_partition): splits a FEW of a base
+    # partition's own leaves one level deeper, leaving the rest as-is (see
+    # its own docstring -- needs no new math, the group-folding identity
+    # already covers groups of any size). _random.seed pins this
+    # deterministic across runs; every recipe on the menu gets one random
+    # targeting so the check spans flat, single-level, and multi-level
+    # bases alike, not just one shape.
+    _rng = _random.Random(20240917)
+    targeted_cases = {}
+    targeted_reconstruct_ok = True
+    for recipe in menu_:
+        base_ = ut.build_partition(recipe, CS_)
+        n_t = min(_rng.randrange(4), len(base_))
+        leaf_idxs = _rng.sample(range(len(base_)), n_t) if n_t else []
+        targets_ = []
+        for li in leaf_idxs:
+            width = len(base_[li][0])
+            divisors = [q for q in range(2, width) if width % q == 0]
+            if not divisors:
+                continue
+            targets_.append((li, _rng.choice(('row-major', 'transposed')), _rng.choice(divisors)))
+        tp_ = ut.build_targeted_partition(base_, targets_)
+        targeted_cases[f"build_targeted_partition({recipe}, {targets_})"] = (
+            tp_, _vut.build_targeted_partition(base_, targets_))
+        covers = sorted(sum([leaf[0] for leaf in tp_], [])) == list(range(CS_))
+        sweeps_t = ut.eval_row_grouped(D_, X_row, mod_, tp_)
+        recon_t = ut.mul_row_grouped(sweeps_t, Y_row, tp_, D_, mod_)
+        targeted_reconstruct_ok &= covers and recon_t == target_
+    parity("ms6.utils6 <-> vs6.utils6 (targeted fold)", targeted_cases)
+    check("targeted fold : every recipe's targeted variant covers the row exactly once "
+          "and reconstructs the same row target as its untargeted base",
+          targeted_reconstruct_ok)
+
+    _flat_base = ut.build_partition([], CS_)  # one leaf, width CS_ -- always splittable
+    try:
+        ut.build_targeted_partition(_flat_base, [(0, 'row-major', 2), (0, 'transposed', 2)])
+        duplicate_raised = False
+    except ValueError:
+        duplicate_raised = True
+    check("targeted fold : duplicate leaf_idx in targets raises ValueError", duplicate_raised)
 
     _a1, _a2 = u.Acc(3, 12), _vu.Acc(3, 12)
     for _v in svals:

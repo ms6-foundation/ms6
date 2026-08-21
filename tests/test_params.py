@@ -28,16 +28,37 @@ def run(check):
     def rejects(expect_or_params, use_as_expect=True):
         try:
             if use_as_expect:
-                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b, h1s_b, p_b,
+                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b, B.d), x_b, perm_b, h1s_b, p_b, B.d,
                     expect=expect_or_params)
             else:
-                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b), x_b, perm_b, h1s_b,
-                    expect_or_params)
+                vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b, B.d), x_b, perm_b, h1s_b,
+                    expect_or_params, B.d)
             return False
         except ParamMismatch:
             return True
 
-    check("params        : wrong pinned d rejected", rejects({"d": p_ok["d"] + 1}))
+    check("params        : d not present in params/expect (moved out, "
+          "pre-shared only)",
+          "d" not in p_ok and "d" not in PARAM_KEYS)
+
+    def wrong_d_fails(wrong_d):
+        """d is no longer pinnable via expect= (see PARAM_KEYS's own comment
+        -- it isn't a params key at all any more), so a wrong d can't surface
+        as ParamMismatch. It still can't verify silently either: reconstruction
+        itself breaks -- AssertionError (final h==c check) if wrong_d is low,
+        typically IndexError (walking past the end of a sweep sized by the
+        prover's true, lower degree) if wrong_d is high. Either counts as
+        correctly rejected here."""
+        try:
+            vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b, B.d), x_b, perm_b, h1s_b, p_b, wrong_d)
+            return False
+        except (AssertionError, IndexError):
+            return True
+
+    check("params        : wrong d (lower) fails verification",
+          wrong_d_fails(B.d - 1) if B.d > 1 else True)
+    check("params        : wrong d (higher) fails verification",
+          wrong_d_fails(B.d + 1))
     check("params        : wrong pinned mod rejected", rejects({"mod": p_ok["mod"] - 2}))
     check("params        : typo in expect key rejected", rejects({"chunck_size": 12}))
     check("params        : nonsense mod rejected",

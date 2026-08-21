@@ -60,9 +60,9 @@ def run(check):
 
     c_row, h_row, x_row, s_row, hm_row, perm_row, h1s_row, p_row = Row_par.opening()
     claims_row = {3: row_vals[3], 40: row_vals[40]}
-    ps_row = ps6(claims_row.keys(), h_row, hm_row, s_row, p_row)
+    ps_row = ps6(claims_row.keys(), h_row, hm_row, s_row, p_row, d)
     check("parallelism   : row-level-parallel commit still verifies correctly",
-          vs6(c_row, claims_row, ps_row, x_row, perm_row, h1s_row, p_row))
+          vs6(c_row, claims_row, ps_row, x_row, perm_row, h1s_row, p_row, d))
 
 
 if __name__ == "__main__":

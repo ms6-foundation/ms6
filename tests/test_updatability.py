@@ -59,9 +59,9 @@ def run(check):
 
     c_b, h_b, x_b, s_b, hm_b, perm_b, h1s_b, p_b = B.opening()
     superseded = {7: base[7]}                      # the value replace() overwrote
-    ps_b = ps6(superseded.keys(), h_b, hm_b, s_b, p_b)
+    ps_b = ps6(superseded.keys(), h_b, hm_b, s_b, p_b, B.d)
     try:
-        vs6(c_b, superseded, ps_b, x_b, perm_b, h1s_b, p_b)
+        vs6(c_b, superseded, ps_b, x_b, perm_b, h1s_b, p_b, B.d)
         rejected = False
     except AssertionError:
         rejected = True
@@ -112,7 +112,7 @@ def run(check):
 
     _, h_d, _, s_d, hm_d, _, _, p_d = D0.opening()
     try:
-        ps6({7}, h_d, hm_d, s_d, p_d)
+        ps6({7}, h_d, hm_d, s_d, p_d, D0.d)
         opened_dead = True
     except ValueError:
         opened_dead = False
@@ -124,10 +124,10 @@ def run(check):
     _, h_pre, _, s_pre, hm_pre, _, _, p_pre = D1.opening()
     cl_pre = {6: D1.vals[6]}
     ps_pre = ps6(cl_pre.keys(), h_pre, [list(b) for b in hm_pre],
-                 [list(r) for r in s_pre], p_pre)
+                 [list(r) for r in s_pre], p_pre, D1.d)
     D1.delete(7)                      # same batch as index 6
     try:
-        vs6(D1.c, cl_pre, ps_pre, D1.x_list, D1.perms, D1.h1_salts, D1.params)
+        vs6(D1.c, cl_pre, ps_pre, D1.x_list, D1.perms, D1.h1_salts, D1.params, D1.d)
         stale_ok = True
     except AssertionError:
         stale_ok = False

@@ -105,9 +105,23 @@ def _attach_edges_pad(row, rand_edge_size):
 # NOTE FOR VERIFIERS: this dict arrives from the prover alongside the proof.
 # It carries no secrets -- but it is also not self-authenticating. A verifier
 # that has agreed public parameters out of band should compare `params`
-# against them before calling vs6, rather than accepting whatever d/q/mod the
+# against them before calling vs6, rather than accepting whatever q/mod the
 # prover supplies.
-PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
+#
+# d is deliberately NOT in here -- see ms6.core.PARAM_KEYS's own comment.
+# It is pre-shared out of band and passed to vs6() as its own required
+# argument instead, so a party who only ever sees `c` (never an opening)
+# has no path to it via this dict. This does not hide d from anyone who
+# DOES see an opening -- the disclosed sweep's own length is
+# d*(chunk_size-1)+1, recoverable given the still-public chunk_size.
+PARAM_KEYS = ("q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
+
+
+def _validate_d(d):
+    """d's own validation, standalone now that it no longer travels inside
+    `params` -- see PARAM_KEYS's own comment. vs6() calls this at entry."""
+    if not isinstance(d, int) or d < 1:
+        raise ParamMismatch(f"d must be a positive int, got {d!r}")
 
 
 def _brief(v):
@@ -132,11 +146,14 @@ def _validate_params(params, expect=None):
 
     The structural half runs unconditionally because `params` reaches the
     verifier from the prover: it carries no secrets, but it is not
-    self-authenticating either, so nonsense or hostile values (mod=1, d=0)
-    should not get as far as the arithmetic.
+    self-authenticating either, so nonsense or hostile values (mod=1,
+    chunk_size=0) should not get as far as the arithmetic. d is NOT
+    validated here -- it is no longer part of `params`; see PARAM_KEYS's
+    own comment. Callers that accept d as a separate argument validate it
+    via _validate_d instead.
 
     `expect` may be a subset -- pin only the keys you actually care about
-    (typically mod/d/q) and leave the rest free. Unknown keys in `expect`
+    (typically mod/q) and leave the rest free. Unknown keys in `expect`
     raise rather than being silently ignored, so a typo can't quietly
     disable the check it was meant to add.
     """
@@ -144,7 +161,7 @@ def _validate_params(params, expect=None):
     if missing:
         raise KeyError(f"params missing required key(s): {', '.join(missing)}")
 
-    for k in ("d", "q", "chunk_size", "batch_size", "seal_batch_size"):
+    for k in ("q", "chunk_size", "batch_size", "seal_batch_size"):
         v = params[k]
         if not isinstance(v, int) or v < 1:
             raise ParamMismatch(f"params[{k!r}] must be a positive int, got {v!r}")
@@ -170,8 +187,10 @@ def _validate_params(params, expect=None):
 
 
 def unpack_params(params, expect=None):
-    """params -> (d, q, chunk_size, batch_size, mod, seal_batch_size),
-    validated first -- see _validate_params."""
+    """params -> (q, chunk_size, batch_size, mod, seal_batch_size,
+    rand_edge_size), validated first -- see _validate_params. d is NOT
+    part of this tuple any more -- see PARAM_KEYS's own comment; vs6()
+    takes it as its own separate argument."""
     _validate_params(params, expect)
     return tuple(params[k] for k in PARAM_KEYS)
 
@@ -352,21 +371,33 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     else:
         M = [[1] * chunk_size for _ in range(x)]
 
-    # mul_row_grouped (per-group Cauchy-product reconstruction, paired with
-    # ps6's eval_row_grouped) only leaks a handful of edge columns rather
-    # than every column -- same combinatorial-enumeration leak as the flat
-    # path, see vs6.utils6.Utils.mul_combinations_mod's KNOWN LEAK
-    # docstring (mul_group_hvec's own per-group calls into it inherit the
-    # same discussion, not a new leak of their own).
+    # mul_row_grouped_two_stage (per-group, binomial-weighted Cauchy-product
+    # reconstruction, paired with ps6's eval_row_grouped) only leaks a
+    # handful of edge columns rather than every column -- same
+    # combinatorial-enumeration leak as the flat path, see
+    # vs6.utils6.Utils.mul_combinations_mod's KNOWN LEAK docstring
+    # (mul_group_bucket_vec's own per-group calls into
+    # mul_combinations_bucket_vec inherit the same discussion, not a new
+    # leak of their own).
     #
-    # `ps[i]` is now (choice_idx, sweep) per row -- ps6's own disclosed
-    # index into ut.partition_menu(chunk_size) (each entry a RECIPE -- a
-    # list of (orientation, q) steps, possibly several levels deep, or []
-    # for flat) plus the per-group, per-degree sweep eval_row_grouped
-    # produced for that choice (see ms6.core._finish_ps6). The menu is
-    # public and cheap enough to recompute here (same call, same
-    # chunk_size, on both sides -- parity-checked, tests/test_parity.py)
-    # rather than transmit; only the row's own choice of index travels.
+    # `ps[i]` is (choice_idx, sweep) per row -- ps6's own disclosed index
+    # into ut.partition_menu(chunk_size) (each entry a RECIPE -- a list of
+    # (orientation, q) steps, possibly several levels deep, or [] for
+    # flat) plus the per-group, per-degree sweep eval_row_grouped produced
+    # for that choice (see ms6.core._finish_ps6). The menu is public and
+    # cheap enough to recompute here (same call, same chunk_size, on both
+    # sides -- parity-checked, tests/test_parity.py) rather than transmit;
+    # only the row's own choice of index travels.
+    #
+    # mul_row_grouped_two_stage, not mul_row_grouped, because _seal_grid's
+    # row-seal target is the TWO-STAGE fold (eval_level_mod(d,H1,mod,
+    # coef=True) bucket-sum, then a second degree-d vsum_level_fold_mod),
+    # not the plain h_d(H1) mul_row_grouped reconstructs -- see
+    # mul_row_grouped_two_stage's own docstring for the verified binomial-
+    # weighted group composition that makes this reconstruction match
+    # _seal_grid's own flat construction bit-for-bit, without paying a
+    # flat eval_level_mod(d, row, mod, coef=True) call's combinatorial cost
+    # at real chunk_size (ms6_vibe.md).
     menu = ut.partition_menu(chunk_size)
     partitions = [ut.build_partition(menu[choice], chunk_size)
                   for choice, _sweep in ps]
@@ -375,24 +406,40 @@ def _vs6_batch(ps, vals, x, chunk_size, d, q, workers=DEFAULT_WORKERS, mod=DEFAU
     if workers and workers > 1 and len(ps) > 1:
         from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            H = list(ex.map(ut.mul_row_grouped, sweeps, M, partitions,
+            H = list(ex.map(ut.mul_row_grouped_two_stage, sweeps, M, partitions,
                              [d] * len(ps), [mod] * len(ps)))
     else:
-        H = [ut.mul_row_grouped(sweeps[i], M[i], partitions[i], d, mod) for i in range(len(ps))]
+        H = [ut.mul_row_grouped_two_stage(sweeps[i], M[i], partitions[i], d, mod) for i in range(len(ps))]
 
     h = ut.vsum_level(H, b=chunk_size)
     return _seal_hash(h)
 
 
-def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=DEFAULT_WORKERS, expect=None):
+def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=DEFAULT_WORKERS, expect=None):
     """`params` is ms6()'s own returned parameter dict (see PARAM_KEYS) --
-    d/q/chunk_size/batch_size/mod/seal_batch_size come from it rather than
+    q/chunk_size/batch_size/mod/seal_batch_size come from it rather than
     being passed loose, so a proof cannot be verified under different
     parameters than it was produced under.
 
-    `expect` pins that dict against parameters agreed out of band, e.g.
-    expect={"mod": MY_MOD, "d": 3}. It may name any subset of PARAM_KEYS;
-    a mismatch raises ParamMismatch rather than AssertionError, so
+    `d` (the row-seal degree) is its own separate, required argument, NOT
+    part of `params` -- see PARAM_KEYS's own comment. The verifier must
+    already know it from an out-of-band agreement with the committer
+    (the same trust boundary `expect` covers for the rest of params);
+    there is no field in `params`/`expect` to pin it against any more.
+    Passing the WRONG d here is not a ParamMismatch -- vs6 has no
+    reference value to compare it to -- it never verifies silently either
+    way: a lower wrong d reconstructs a different (wrong) row-seal and
+    fails the final h == c check (AssertionError); a higher wrong d also
+    typically raises before reaching that check, since the disclosed
+    sweep's own length was fixed by the PROVER's true d and a verifier
+    walking combinations at a larger degree indexes past the end of it
+    (IndexError) -- checked directly, never a silent True, across a
+    spread of degree/chunk_size/batch combinations (ms6_vibe.md).
+
+    `expect` pins `params` against parameters agreed out of band, e.g.
+    expect={"mod": MY_MOD}. It may name any subset of PARAM_KEYS (d is not
+    a member of PARAM_KEYS any more, so it cannot appear in `expect`); a
+    mismatch raises ParamMismatch rather than AssertionError, so
     "verified under the wrong parameters" is distinguishable from "proof
     invalid". Structural validation of params runs either way -- see
     _validate_params. Pass it whenever the verifier has its own notion of
@@ -430,7 +477,8 @@ def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=DEF
     parallelism inside _vs6_batch is only used when a single batch is
     touched.
     """
-    d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size = unpack_params(params, expect)
+    _validate_d(d)
+    q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size = unpack_params(params, expect)
     assert len(ps_list) == len(x_list) == len(h1_salt_list)
 
     per_batch_vals = [[] for _ in ps_list]

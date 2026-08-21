@@ -14,30 +14,32 @@ from tests.harness import (  # noqa: F401
 def run(check):
     chunk_size, d, q = 40, 3, 10
 
-    WIDTH, DEPTH = 10, 4
+    WIDTH, DEPTH = 10, 1
     vals = [(1720941241 + (i**70) ^ (i**99)) % 2**200 for i in range(WIDTH ** DEPTH)]
     c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(vals, d, q, chunk_size=chunk_size)
 
-    claims = {0: vals[0], 99: vals[99]}
+    claims = {0: vals[0], 9: vals[9]}
 
-    # params travels with the proof: ps6/vs6 read d/q/chunk_size/batch_size/
+    # params travels with the proof: ps6/vs6 read q/chunk_size/batch_size/
     # mod/seal_batch_size from it, so none of the three can be run under
-    # parameters the others didn't use.
+    # parameters the others didn't use. d is no longer part of params (see
+    # ms6.core.PARAM_KEYS's own comment) -- it's a separate, pre-shared
+    # argument passed to ps6/vs6 directly, and can't appear in expect=.
     # A verifier with its own notion of the correct parameters pins them
     # with expect=; params arrives from the prover and is not
     # self-authenticating on its own.
-    agreed = {"d": d, "q": q, "chunk_size": chunk_size, "mod": DEFAULT_MOD}
+    agreed = {"q": q, "chunk_size": chunk_size, "mod": DEFAULT_MOD}
 
-    ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, workers=1)
+    ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, d, workers=1)
     check("round trip    : commit -> open -> verify over %d items" % len(vals),
-          vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=1, expect=agreed))
+          vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=1, expect=agreed))
 
     # a wrong value at a claimed index must be rejected, or "it verified" means
     # nothing
     tampered = dict(claims)
     tampered[0] = vals[1]
     try:
-        vs6(c, tampered, ps_list, x_list, perm_list, h1_salt_list, params, workers=1, expect=agreed)
+        vs6(c, tampered, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=1, expect=agreed)
         rejected = False
     except AssertionError:
         rejected = True

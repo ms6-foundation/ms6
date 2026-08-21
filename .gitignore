@@ -14,5 +14,8 @@ venv/
 # Docs (kept out of the repo: currently holds ms6_eprint.tex, the spec paper)
 docs/
 
+# Scratch/toy probes for exploring folding math before wiring into ms6/vs6
+fold6/
+
 # OS
 .DS_Store

@@ -12,8 +12,12 @@ other N-2 salaries, and without the auditor having to trust HR's word for
 it.
 
   1. COMMIT  (HR, once):        c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(salaries, d, q)
-  2. PROVE   (HR, per audit):   ps_list = ps6(iset, h_list, hm_list, s_list, params)
-  3. VERIFY  (auditor, per audit): vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params)
+  2. PROVE   (HR, per audit):   ps_list = ps6(iset, h_list, hm_list, s_list, params, d)
+  3. VERIFY  (auditor, per audit): vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d)
+
+`d` (the row-seal degree) is not part of `params` -- it travels alongside it
+as a separate, pre-shared value HR and the auditor already agree on out of
+band (see ms6.core.PARAM_KEYS's own comment for why).
 
 `c` is the only thing that ever needs to be public ahead of time. `ps_list`
 is the audit-specific proof HR hands the auditor together with the two
@@ -117,7 +121,7 @@ def main():
     print(f"[Auditor] requests audit of: {audit_names}")
 
     t0 = time.time()
-    ps_list = ps6(audit_positions, h_list, hm_list, s_list, params, workers=WORKERS)
+    ps_list = ps6(audit_positions, h_list, hm_list, s_list, params, D, workers=WORKERS)
     t1 = time.time()
     payload_size = sum(len(row) if isinstance(row, list) else 1 for batch in ps_list for row in
                         (batch if isinstance(batch, list) else [batch]))
@@ -134,7 +138,7 @@ def main():
     def run_check(label, claimed_vals, expect_accept):
         claims = dict(zip(audit_positions, claimed_vals))
         try:
-            vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
+            vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, D, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False
@@ -183,9 +187,9 @@ def main():
     def audit_update(label, idxs, values, expect_accept):
         c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, params_u = payroll.opening()
         claims = dict(zip(idxs, values))
-        ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, workers=WORKERS)
+        ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, payroll.d, workers=WORKERS)
         try:
-            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, workers=WORKERS)
+            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, payroll.d, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False

@@ -143,6 +143,14 @@ DEFAULT_HMAX_PAD_SIZE = int(str(ut.hash(9, DEFAULT_S_MOD, DEFAULT_S_EXP)))
 # the library's own default chunk_size=40.
 DEFAULT_RAND_EDGE_SIZE = 6
 
+# Upper bound on how many leaves _finish_ps6's TARGETED fold splits one
+# level deeper, per row, on top of the row's own (already independently
+# random) base partition choice -- see _finish_ps6's own comment. 0 is
+# always a possible draw (no targeting that row), so this is a ceiling,
+# not a floor; kept small since the whole point is a handful of leaves
+# paying the deeper disclosure, not the row uniformly.
+DEFAULT_MAX_FOLD_TARGETS = 3
+
 # Domain-separation tags for the item digest itself (H1/H2, see
 # _hash_item): H1_TAG for H1 = domain_hash(H1_TAG:h1_salt:val) (the
 # H/accH side, which vs6._vs6_batch must reproduce for claimed items --
@@ -242,19 +250,48 @@ def _attach_edges_s(row, h1_salt, slot_index, row_index, rand_edge_size):
 # other).
 #
 # Deliberately NOT in here:
+#   d                 the row-seal degree -- pre-shared out-of-band between
+#                     committer and verifier instead, passed as its own
+#                     explicit argument to ps6()/vs6() rather than riding
+#                     along in this dict. `params` reaches the verifier
+#                     FROM the prover (see this dict's own "not self-
+#                     authenticating" framing below); d does not travel
+#                     that path at all now, so a party who has only `c`
+#                     (no opening) never sees it here, unlike every other
+#                     entry in this dict, which an opening's own params
+#                     blob discloses regardless. This does NOT hide d from
+#                     anyone who observes an actual opening/proof -- the
+#                     disclosed sweep's own length is d*(chunk_size-1)+1,
+#                     so d is recoverable from the proof's shape alone
+#                     given the (still public) chunk_size; moving it here
+#                     only keeps it out of the bare params blob, see
+#                     ms6_vibe.md for the analysis that ruled out anything
+#                     stronger via renaming/relabeling alone.
 #   s_mod, s          per-commit secrets -- this dict goes to the verifier
 #   s_exp, pad_size,
 #   keep_hm           prover-only, never consulted by ps6/vs6
 #   workers           a local performance choice; each party picks its own
-PARAM_KEYS = ("d", "q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
+PARAM_KEYS = ("q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
 
 
-def make_params(d, q, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
+def _validate_d(d):
+    """d's own validation, standalone now that it no longer travels inside
+    `params` (see PARAM_KEYS's own comment) -- ps6/vs6 call this at entry
+    since they're where d is now supplied as an explicit, separate
+    argument rather than read out of a dict that's already been through
+    _validate_params."""
+    if not isinstance(d, int) or d < 1:
+        raise ParamMismatch(f"d must be a positive int, got {d!r}")
+
+
+def make_params(q, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
                 mod=DEFAULT_MOD, seal_batch_size=DEFAULT_SEAL_BATCH_SIZE,
                 rand_edge_size=DEFAULT_RAND_EDGE_SIZE):
     """The public parameter set, as returned by ms6() and consumed by
-    ps6()/vs6()."""
-    return {"d": d, "q": q, "chunk_size": chunk_size, "batch_size": batch_size,
+    ps6()/vs6() -- d is NOT in here, see PARAM_KEYS's own comment; ms6()
+    still takes d as its own explicit argument and callers must track it
+    separately to pass to ps6()/vs6()."""
+    return {"q": q, "chunk_size": chunk_size, "batch_size": batch_size,
             "mod": mod, "seal_batch_size": seal_batch_size,
             "rand_edge_size": rand_edge_size}
 
@@ -281,11 +318,14 @@ def _validate_params(params, expect=None):
 
     The structural half runs unconditionally because `params` reaches the
     verifier from the prover: it carries no secrets, but it is not
-    self-authenticating either, so nonsense or hostile values (mod=1, d=0)
-    should not get as far as the arithmetic.
+    self-authenticating either, so nonsense or hostile values (mod=1,
+    chunk_size=0) should not get as far as the arithmetic. d is NOT
+    validated here -- it is no longer part of `params` at all (see
+    PARAM_KEYS's own comment); callers that accept d as a separate
+    argument validate it via _validate_d instead.
 
     `expect` may be a subset -- pin only the keys you actually care about
-    (typically mod/d/q) and leave the rest free. Unknown keys in `expect`
+    (typically mod/q) and leave the rest free. Unknown keys in `expect`
     raise rather than being silently ignored, so a typo can't quietly
     disable the check it was meant to add.
     """
@@ -293,7 +333,7 @@ def _validate_params(params, expect=None):
     if missing:
         raise KeyError(f"params missing required key(s): {', '.join(missing)}")
 
-    for k in ("d", "q", "chunk_size", "batch_size", "seal_batch_size"):
+    for k in ("q", "chunk_size", "batch_size", "seal_batch_size"):
         v = params[k]
         if not isinstance(v, int) or v < 1:
             raise ParamMismatch(f"params[{k!r}] must be a positive int, got {v!r}")
@@ -319,8 +359,10 @@ def _validate_params(params, expect=None):
 
 
 def unpack_params(params, expect=None):
-    """params -> (d, q, chunk_size, batch_size, mod, seal_batch_size),
-    validated first -- see _validate_params."""
+    """params -> (q, chunk_size, batch_size, mod, seal_batch_size,
+    rand_edge_size), validated first -- see _validate_params. d is NOT
+    part of this tuple any more -- see PARAM_KEYS's own comment; callers
+    that need d take it as their own separate argument."""
     _validate_params(params, expect)
     return tuple(params[k] for k in PARAM_KEYS)
 
@@ -630,6 +672,7 @@ def _seal_grid(accH_cnt, accS_cnt, S0, chunk_size, d, q, mod, s_mod,
         with ProcessPoolExecutor(max_workers=workers) as ex:
             H = list(ex.map(ut.seal_row_mod, [(H1, d, mod) for H1 in H]))
     else:
+        H = [[sum(hv) % mod for hv in ut.eval_level_mod(d, H1, mod, coef=True)] for H1 in H]
         H = [ut.vsum_level_fold_mod(d, mod, values=H1, global_keys=True) for H1 in H]
 
     h = ut.vsum_level(H, b=chunk_size)
@@ -939,6 +982,15 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     _h1_salt) -- same deal: pass it to vs6 alongside perm_list, ps6 needs
     no separate copy of it either.
 
+    d is likewise not placed in the returned params dict (see PARAM_KEYS's
+    own comment) -- callers must track the d they passed in here
+    themselves and supply it explicitly to ps6()/vs6() later, the same way
+    the caller of Commitment already gets it back via C.d. This keeps d
+    out of the blob a party who only holds `c` (never an opening) would
+    ever see; it does not hide d from anyone who does see an opening, since
+    a disclosed proof's own shape reveals it regardless (see PARAM_KEYS's
+    comment for the reasoning).
+
     s_mod=None (the default) builds every batch's S grid in DEFAULT_S_MOD,
     the same ring the H side uses. It is deliberately not returned and not
     placed in params: nothing downstream needs it. S's own
@@ -1011,7 +1063,7 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
         perm_list.append(perm_b)
         h1_salt_list.append(h1_salt_b)
 
-    params = make_params(d, q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size)
+    params = make_params(q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size)
     h = _seal_batch(h_list, chunk_size, max(x_list), d, q, mod, seal_batch_size)
 
     return h, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params
@@ -1310,8 +1362,10 @@ class Commitment:
     @property
     def params(self):
         """The public parameter dict for this commitment -- same contents
-        ms6() returns, so ps6/vs6 are driven by it identically."""
-        return make_params(self.d, self.q, self.chunk_size, self.batch_size,
+        ms6() returns, so ps6/vs6 are driven by it identically. Does NOT
+        include d (see PARAM_KEYS's own comment) -- use self.d, passed
+        explicitly to ps6()/vs6() alongside this dict."""
+        return make_params(self.q, self.chunk_size, self.batch_size,
                            self.mod, self.seal_batch_size, self.rand_edge_size)
 
     def opening(self):
@@ -1655,14 +1709,16 @@ class QueryGovernor:
         return list(self._history.get(batch_index, []))
 
 
-def ps6_governed(governor, iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=None):
+def ps6_governed(governor, iset, h_list, hm_list, s_list, params, d, workers=DEFAULT_WORKERS, expect=None):
     """Convenience wrapper: governor.authorize(iset) then ps6(...). Purely
     additive -- ps6() itself is unchanged and can still be called directly
     by anyone who doesn't want this policy layer (e.g. a deployment doing
     its own query governance, or one that has decided the risk is
-    acceptable for its use case)."""
+    acceptable for its use case). d is passed through unchanged -- see
+    ps6's own docstring for why it's a separate argument now rather than
+    part of params."""
     governor.authorize(iset)
-    return ps6(iset, h_list, hm_list, s_list, params, workers=workers, expect=expect)
+    return ps6(iset, h_list, hm_list, s_list, params, d, workers=workers, expect=expect)
 
 
 def _ps6_batch(hm, iset, chunk_size, d, q, S, mod=DEFAULT_MOD, workers=DEFAULT_WORKERS):
@@ -1707,11 +1763,18 @@ def _ps6_batch(hm, iset, chunk_size, d, q, S, mod=DEFAULT_MOD, workers=DEFAULT_W
     return _finish_ps6(result, d, chunk_size, workers, mod)
 
 
-def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=None):
+def ps6(iset, h_list, hm_list, s_list, params, d, workers=DEFAULT_WORKERS, expect=None):
     """`params` is ms6()'s own returned parameter dict (see PARAM_KEYS) --
-    d/q/chunk_size/batch_size/mod/seal_batch_size are read from it rather
+    q/chunk_size/batch_size/mod/seal_batch_size are read from it rather
     than passed loose, so ps6 cannot be run under different parameters than
     the commitment was built with.
+
+    `d` (the row-seal degree) is its own separate, required argument, NOT
+    part of `params` -- see PARAM_KEYS's own comment for why: it is
+    pre-shared between committer and verifier out of band rather than
+    carried in the dict that travels alongside every opening. The caller
+    here already knows it (they are the one who called ms6/Commitment with
+    it, or are C.d for a Commitment) -- ps6 does not derive or guess it.
 
     iset holds GLOBAL indices into the original vals list ms6 was given
     (0..sum(len(hm_b) for hm_b in hm_list)-1) -- mapped to each batch's own
@@ -1732,7 +1795,8 @@ def ps6(iset, h_list, hm_list, s_list, params, workers=DEFAULT_WORKERS, expect=N
     pools; row-level parallelism inside _ps6_batch/_finish_ps6 is only
     used when a single batch is touched.
     """
-    d, q, chunk_size, batch_size, mod, _sbs, _red = unpack_params(params, expect)
+    _validate_d(d)
+    q, chunk_size, batch_size, mod, _sbs, _red = unpack_params(params, expect)
     iset = set(iset)
 
     boundaries = []
@@ -1798,6 +1862,20 @@ def _finish_ps6(result, d, chunk_size, workers, mod):
     # row's sweep (as (choice_idx, sweep) pairs) since the verifier needs
     # it to rebuild the same partition and cannot derive it from anything
     # else public.
+    #
+    # eval_row_grouped's own disclosure (this function's whole job) does
+    # NOT depend on which row-seal target (the original h_d(row), or the
+    # two-stage fold _seal_grid now builds) the verifier reconstructs from
+    # it -- STAGE1's Y-side (this function's own oset sweep) is the same
+    # coef=False raw, per-group-per-degree enumeration either way; only
+    # vs6.utils6.Utils.mul_row_grouped vs. mul_row_grouped_two_stage (the
+    # verifier's own choice of reconstruction) differs. See
+    # mul_row_grouped_two_stage's own docstring, and ms6_vibe.md for the
+    # verified group-composition derivation (binomial-weighted Cauchy
+    # product of each group's own STAGE1 bucket vector) that makes this
+    # possible without the combinatorial blow-up a flat, single-group
+    # eval_level_mod(d, row, mod, coef=True) call would pay at real
+    # chunk_size.
     menu = ut.partition_menu(chunk_size)
     choices = [gen.randrange(len(menu)) for _ in result]
     partitions = [ut.build_partition(menu[c], chunk_size) for c in choices]

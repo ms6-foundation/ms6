@@ -15,8 +15,12 @@ any other customer's record, and paying a verification cost that does
 NOT grow with the size of the registry.
 
   1. COMMIT  (registry operator, once):     c, h_list, x_list, s_list, hm_list, perm_list, h1_salt_list, params = ms6(registry, d, q)
-  2. PROVE   (registry operator, per request): ps_list = ps6(iset, h_list, hm_list, s_list, params)
-  3. VERIFY  (bank, per request):           vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params)
+  2. PROVE   (registry operator, per request): ps_list = ps6(iset, h_list, hm_list, s_list, params, d)
+  3. VERIFY  (bank, per request):           vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d)
+
+`d` (the row-seal degree) is not part of `params` -- it's a separate,
+pre-shared value the registry operator and every bank already agree on out
+of band (see ms6.core.PARAM_KEYS's own comment).
 
 ms6 splits the registry into BATCH_SIZE-sized groups and commits each
 independently before folding the per-batch results into one final `c`
@@ -63,7 +67,7 @@ sys.set_int_max_str_digits(2_000_000)
 from ms6 import ms6, ps6, Commitment
 from vs6 import vs6
 
-CHUNK_SIZE, D, Q = 100, 3, 10
+CHUNK_SIZE, D, Q = 40, 3, 10
 BATCH_SIZE = 1_000
 N_RECORDS = 120_000
 N_REQUESTS = 10             # simulated screening requests to benchmark
@@ -121,10 +125,10 @@ def main():
     prove_times, verify_times = [], []
     for i, iset in enumerate(requests):
         ps_list, dt_prove = bench(f"  request {i}: proof", lambda iset=iset: ps6(
-            iset, h_list, hm_list, s_list, params, workers=WORKERS))
+            iset, h_list, hm_list, s_list, params, D, workers=WORKERS))
         claims = {j: registry[j] for j in iset}
         _, dt_verify = bench(f"  request {i}: verify (bank side)", lambda claims=claims, ps_list=ps_list: vs6(
-            c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS))
+            c, claims, ps_list, x_list, perm_list, h1_salt_list, params, D, workers=WORKERS))
         prove_times.append(dt_prove)
         verify_times.append(dt_verify)
 
@@ -132,11 +136,11 @@ def main():
     print("--- 3. Soundness checks (registry operator/bank cannot forge a screening result) ---")
     iset0 = requests[0]
     claimed0 = {j: registry[j] for j in iset0}
-    ps0 = ps6(iset0, h_list, hm_list, s_list, params, workers=WORKERS)
+    ps0 = ps6(iset0, h_list, hm_list, s_list, params, D, workers=WORKERS)
 
     def expect_reject(label, claim):
         try:
-            vs6(c, claim, ps0, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
+            vs6(c, claim, ps0, x_list, perm_list, h1_salt_list, params, D, workers=WORKERS)
             print(f"  {label:<55} *** ACCEPTED (should have been rejected!) ***")
         except AssertionError:
             print(f"  {label:<55} REJECTED (correct)")
@@ -161,9 +165,9 @@ def main():
     def verify_update(label, idxs, values, expect_accept):
         c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, params_u = live_registry.opening()
         claims = dict(zip(idxs, values))
-        ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, workers=WORKERS)
+        ps_u = ps6(claims.keys(), h_u, hm_u, s_u, params_u, live_registry.d, workers=WORKERS)
         try:
-            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, workers=WORKERS)
+            vs6(c_u, claims, ps_u, x_u, perm_u, h1s_u, params_u, live_registry.d, workers=WORKERS)
             ok = True
         except AssertionError:
             ok = False

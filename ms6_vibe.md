@@ -3539,3 +3539,708 @@ choice costs about the same to prove/verify as that single-level choice
 would -- this entry's benefit is menu diversity (defense-in-depth), not
 additional raw speed beyond what entry 78's benchmark already showed for
 grouping in general.
+
+## 80. `docs/metaseries/metaseries_foundation_spec.tex` rewritten: `h_d` given its own theorem, plus a new "group folding" section
+
+Both `docs/ms6_eprint.tex` and `docs/metaseries/metaseries_foundation_spec.tex`
+were rejected by IACR ePrint with the same generic, non-technical boilerplate
+(clear/self-contained, look new and interesting, contain proofs). Rather than
+resubmit unchanged, went back to the foundation spec first, since entries
+75-79's own combination/folding machinery is "simple in the implementation
+but looks very complex in the mathematical formulas" (the user's own framing)
+precisely because the spec never actually named the object ms6 needs.
+
+Reread the spec in full (1162 lines) and cross-checked it against the newly
+mounted `/Users/ansari/src/py/ds/metaseries` naive reference implementation
+(`utils.py`/`ms.py`/`ms_fold.py` — the pre-DP ancestor of this repo's own
+`vsum_level_fold_mod`, confirmed by direct numeric comparison across 4 test
+cases, bit-for-bit). Diagnosis: the spec's existing Inner Multiplication
+(`thm:innermult`) and Series Folding (`thm:fold`) sections both formalize
+only the **full/kappa-weighted** instantiation — i.e. the OLD, since-reverted
+`(sum)^d` construction (entry 75) — while ms6 actually runs entirely on the
+**plain/unweighted** instantiation, computing $h_d$ (the complete homogeneous
+symmetric polynomial), for which the spec had no theorem at all. ms6's own
+code comments have had to re-derive this ad hoc rather than cite anything.
+
+Two additions close the gap, both proved from material already in the spec
+rather than invented from scratch:
+
+- **`prop:plainsound`** (inserted right after `thm:sound`): the plain
+  instantiation's `SeriesSum` equals $h_k$ of the positionally-weighted
+  digits — an almost-free corollary of `thm:sound`'s own proof (same
+  multinomial expansion, coefficient 1 instead of kappa at every term).
+- **New §11 "Group Folding"** (`sec:groupfold`, inserted between the renamed
+  "Depth Folding" §10 and the Interface Specification): formalizes the
+  disjoint-union/Cauchy-product fold this session's swappable multi-level
+  fold (entries 76-79) actually relies on — `def:group` (an affine position
+  set `A, A+s, ..., A+(q-1)s`), `lem:cauchy` (standard generating-function
+  factoring over a disjoint union), and `thm:groupfold` (the affine
+  correction factor `gamma(G) = B^(C-(A-1)-s(q-1))`, proved by showing the
+  true-weight/local-weight ratio is constant across a group because the `sp`
+  term cancels identically) — a general statement of exactly what
+  `mul_group_hvec`/`build_partition` compute, independent of ms6's own
+  code. Verified the general theorem itself (not just ms6's specific
+  instantiation of it) with a fresh, ms6-independent probe: 5 cases spanning
+  contiguous blocks, transposed/interleaved groups, uneven group sizes, and
+  a 3-way transpose, all matching direct $h_k$ computation exactly.
+
+Also added: a worked Example/Conformance Vector V10 ($n=6,k=3$,
+$X=(2,3,5,6,7,2)$, continuing the paper's existing "235" motif), verified
+both by direct computation and against `ms_fold.vsum_level_fold` in the
+naive reference module (exact match at $k=2,3$); a disambiguating remark at
+the top of the renamed "Depth Folding" section explaining the two folds are
+independent operations that happen to share the word "folding"; new
+Limitations items (L7 affine-groups-only, L8 no canonical partition
+selection — the latter explicitly scoping ms6's own randomized-choice
+security policy, entries 76-79, as out of scope for this math-only paper);
+a rewritten abstract/introduction leading with plain-English motivation
+(splitting one number's own digits vs. combining several already-separate
+values) and naming "a cryptographic accumulator over batched data" as the
+generic motivating use case, without depending on or naming ms6 itself, to
+address the "look new and interesting" / self-containment half of IACR's
+rejection boilerplate.
+
+### Verified
+
+`pdflatex` (3 passes, to resolve cross-references): clean build, 18 pages,
+zero undefined references, zero LaTeX errors — only pre-existing cosmetic
+font-shape warnings unrelated to this session's edits. The new theorem's
+general form (not tied to ms6's `build_partition` leaf shapes) was probed
+independently in a standalone script before being written up, and V10's
+numbers were checked against both a from-scratch brute-force $h_k$ and the
+naive reference implementation's own `vsum_level_fold`.
+
+Not yet done: `docs/ms6_eprint.tex`'s own Part 1/Part 2 split (outline
+already saved to `docs/ms6_eprint_split_outline.md`, entry not yet written)
+is paused; the plan is to revisit it once this rewritten foundation paper is
+settled, so Part 2's combination/folding sections can cite `prop:plainsound`
+and the new `sec:groupfold` directly instead of re-deriving the same math
+ad hoc, per the user's original request to use this spec as ms6's companion
+document.
+
+## 81. `docs/ms6_eprint.tex` split into `ms6_eprint_part1.tex` / `ms6_eprint_part2.tex`
+
+Followed through on the split proposed in `docs/ms6_eprint_split_outline.md`
+(agreed via AskUserQuestion earlier this session) now that entry 80 gave
+Part 2 something real to cite instead of re-deriving its own math. Request:
+"please rewrite the ms6_eprint into two parts with keeping the simplicity,
+presentation/self-containment."
+
+**Part 1** (`ms6_eprint_part1.tex`, "Construction, Completeness, and
+Binding"): Preliminaries through Binding, mechanically split at the
+outline's agreed boundary (line 785 of the original, right before
+"Structural exposure at the edge columns"). Every forward `\ref` from
+Part 1's kept sections into now-Part-2-only labels (`sec:leak`,
+`sec:decoy`, `sec:governance`, `sec:fold`, `rem:mod-choice`, `op:hash`,
+`op:binding`, etc. — 19 sites, found by a small script diffing each
+`\ref`'s target against which half of the original file defines it) was
+rewritten as prose pointing at "the companion paper (Part II)" rather than
+left as a dangling reference. Abstract, status box, and introduction
+rewritten to drop every edge-column/query-governance preview (previously
+about half their length) and end with an explicit scope statement instead.
+Added a new Remark right after the paper's own Lemma cauchy/Hadamard
+statements, citing entry 80's rewritten `metaseries_foundation_spec.tex`
+directly: `h_d` here is that document's plain instantiation, Lemma cauchy
+is its disjoint-union convolution lemma specialized away from affine
+groups, and Part 2's multi-level fold is the further generalization it
+proves as "group folding" — this is the "use the Meta-Series notation
+wherever possible" ask from earlier in the session, applied for the first
+time. Binding section gained an opening "bottom line, stated once"
+paragraph (proved / assumed / verified-only, three sentences) ahead of its
+four existing subsections, since the honesty was already there but
+required reading all four subsections to piece together. Added a closing
+"Where Part II picks up" section instead of ending mid-argument.
+
+**Part 2** (`ms6_eprint_part2.tex`, "Deployment Hardening, Updatability,
+and Multi-Level Folding"): opens with a new ~130-line "Recap of Part I"
+section rather than assuming Part 1 is open in another tab — restates
+construction/commitment/opening/domain-hash/completeness/binding without
+proof, deliberately re-using Part 1's own label names
+(`sec:construction`, `sec:commit`, `fact:cellprod`, `lem:hadamard`,
+`lem:cauchy`, `thm:completeness`, `rem:lockstep`, `rem:prime-table`, etc.)
+so every existing `\ref` in the ~900 lines carried over from the original
+(Structural exposure, Updatability, Efficiency, Related work, Open
+problems, Conclusion) kept working unmodified — first compile attempt
+surfaced 5 labels the recap had missed (`lem:hadamard`, `lem:cauchy`,
+`thm:completeness`, `rem:lockstep`, `rem:prime-table`), fixed by adding
+each to the recap rather than chasing individual `\ref` sites. Two new
+sections written from this session's own entries 75-79: "Swappable
+Multi-Level Folding" (the partition-menu/recipe design, its own
+"erratum" subsection recording entry 75's root-extraction episode as the
+reason the grouping identity has to be exact rather than merely
+similar-looking, and an explicit statement that this and query governance
+together are still defense-in-depth, not a closure of `op:multiquery` —
+citing the companion foundation paper's group-folding theorem directly
+instead of re-deriving the affine correction factor in ms6-specific
+notation) and "Sparse Domain-Hash Expansion and Wider Grid Width" (entry
+78's construction and measured numbers: flat `chunk_size` 40→100 is
+4.7x slower, but a grouped partition at 100 is 5.9x faster than the old
+40-flat baseline). `op:multiquery`'s own text updated to acknowledge both
+new mitigations without overclaiming resolution. Efficiency section
+gained a front-matter note flagging its own table as measured at the
+now-superseded `chunk_size=40` default, pointing at the new section's
+measurements instead of silently leaving stale numbers looking current.
+Higher-degree-$d$ folding got a one-paragraph placeholder remark
+("planned, not yet started, pending pseudocode") rather than any design
+work, per the standing instruction to wait for that pseudocode.
+
+### Verified
+
+`pdflatex` (3 passes each, both files): Part 1 compiles clean at 15
+pages, Part 2 at 21 pages, zero undefined references and zero warnings of
+any kind on the final pass of either — the 5 missing-label and 19
+dangling-forward-ref issues above were both caught this way, not by
+manual proofreading. Citation lists for each file cross-checked against
+their own `\cite{}` usage before finalizing the bibliography (Part 1 no
+longer cites `CatalanoFiore2013`, used only in Part 2's Related Work).
+
+Not yet done: a full re-benchmark of Part 2's Efficiency table (commit,
+verify, build, append, replace) at the new `chunk_size=100` default —
+flagged in-paper as future work rather than silently left stale.
+
+## 82. Higher-degree-$d$ folding investigated and rejected — the pseudocode from entry 81's placeholder arrived, and turned out not to help
+
+The pseudocode entry 81's Remark was waiting on arrived as `ms6/fold6.py`:
+fold a large degree $d$ (e.g. 27) by composing three applications of a
+small fixed degree ($k=3$), tracking each intermediate result's own
+row-index (`sq`/`ds` arrays, combined via `comb_pairs`/`eval_combinations`,
+collapsed at the end via `ieval`'s `vsum_level`). The ask was to verify it,
+wire it into `Utils.vsum_level_fold_mod`, and test higher degree end to
+end.
+
+**The identity itself checks out.** Ran `fold6.py`'s own example
+(`k=3, q=3, ds=[2,3,3,5]`) and compared against an independent brute-force
+`h_27` (direct `itertools.combinations_with_replacement` enumeration,
+bucketed by row-index, reduced via `vsum_level`) — exact match. Repeated
+across seven more `(values, k, q)` combinations (different sizes, degrees,
+repeated values) — all matched. Folding degree $k$ a total of $q$ times
+genuinely does reproduce $h_{k^q}$ of the original values, provided the
+row-index of each intermediate result is carried forward and used as the
+next stage's position weight. This is the same identity the companion
+foundation paper already proves as multi-stage exponentiation to a
+composite degree — `fold6.py` is a correct, independently-arrived-at
+instance of it, restricted to the coefficient-free (`h_d`, not `n**d`)
+case.
+
+**But it isn't needed, and a corrected efficient version isn't cheaper
+than what already exists.** Two things surfaced before any wiring:
+
+1. `Utils.vsum_level_fold_mod` already computes `h_d` for arbitrary `d`
+   directly — its DP (`h_vector_mod`'s ascending-`c` accumulation) is
+   `O(d * row_width)`, linear in the degree with no combinatorial term at
+   all. Benchmarked at `L=100`: `d=27` in ~1ms, `d=81` in ~4ms. Cross-checked
+   against the same brute-force `h_d` used above (`d=3,5,9`, exact match).
+   There is no degree at which this construction currently needs to reach
+   that the existing DP doesn't already handle in single-digit
+   milliseconds.
+2. `fold6.py`'s own literal algorithm doesn't scale to real row widths
+   regardless: it carries the *entire unbucketed* per-combo list between
+   stages (never sums same-row-index entries until the very last step), so
+   at `L=100`, `k=3` the first fold stage alone produces ~170k combos and
+   the second would need `C(170002, 3)` more — intractable outside toy
+   sizes like the 4-element example.
+
+That raised the real question: is there a DP-optimized version of the
+staging identity that's actually cheap, the way `mul_combinations_mod`/
+`fold_h_vector_mod`/the multi-level column fold all DP-optimized their own
+naive-enumeration ancestors earlier in this project? Spent a working
+session on exactly that, and it doesn't exist — not "not found yet," but
+provably doesn't exist for this identity:
+
+- A row-index bucket after one fold stage can hold *multiple* distinct
+  combinations, not one (e.g. for `n=4, k=3`, both `(0,0,2)` and `(0,1,1)`
+  land on row-index 2). Naively collapsing a bucket to its summed value
+  before the next stage is wrong — confirmed by an explicit symbolic
+  counterexample (`sympy`, `x1,x2` at degree 2): the *true* profile of the
+  row-index-0 bucket after one stage is `[1, x1**2, x1**4]` (a single
+  member, `x1**2`, so picking it 0/1/2 times), but reading the naive merged
+  DP table at that bucket gives `[1, x1, x1**2]` — a different, wrong
+  quantity, because it silently treats "sum of this bucket" as if it were
+  "the one value in this bucket."
+- The fix — track each bucket's full power-sum profile (via `p_e =
+  h_row_vector_mod` on `values**e`, converted to the complete-homogeneous
+  basis via Newton's identity `n*h_n = sum_i p_i*h_{n-i}`) — is correct for
+  *one* stage transition (verified numerically: recovers the true
+  multi-member bucket profiles above exactly, matching a from-scratch
+  enumeration). But carrying it through a *second* transition needs power
+  sums up to `e * k_stage`, not just `k_stage` — the degree bound this
+  needs grows with the stage count, and by the third stage it has grown to
+  the *full* target degree. At that point the staged computation costs the
+  same as computing `h_d` directly in one pass; there is no intermediate
+  regime where staging is both correct and cheaper.
+
+**Conclusion: nothing was wired in.** `vsum_level_fold_mod` is unchanged —
+it already does the job. `fold6.py` stays in the repo as a verified,
+unwired reference implementation of a real identity that just doesn't
+happen to be useful here. Part 2's placeholder Remark (entry 81, "planned,
+not yet designed") is rewritten to state this outcome plainly: the identity
+holds, was checked, and a genuinely efficient version of it is provably no
+cheaper than the direct computation already in use — matching the paper's
+existing practice of naming what was tried and rejected, not just what
+shipped.
+
+### Verified
+
+Seven-plus `(values, k, q)` combinations against independent brute-force
+`h_{k^q}` (exact match, confirming `fold6.py`'s identity). Existing
+`vsum_level_fold_mod` against independent brute-force `h_d` at `d=3,5,9`
+(exact match) and benchmarked at `d=27,81` on `L=100` (1-4ms). Symbolic
+counterexample (`sympy`) showing the naive multi-stage bucket-merge is
+wrong, and numeric confirmation that power-sum + Newton's-identity
+extraction recovers the true bucket profile for one stage transition.
+
+Added `tests/test_higher_degree.py` (registered in `tests/run_all.py`) as
+the lasting regression check: `vsum_level_fold_mod` (both the `ms6` and
+`vs6` copies, for parity) against brute-force `h_d` at `d=3,9,27,45`; a
+timing check that `d=81` over 100 values stays well under a second; and a
+real `Commitment`/`ps6`/`vs6` round trip at `d=9` (above the shipped
+default) to confirm degree is just a parameter with nothing folding-shaped
+underneath it. Full suite (103 checks across all modules) green.
+
+`docs/ms6_eprint_part2.tex`'s Remark rewritten and recompiled (`pdflatex`,
+3 passes, 21 pages, zero undefined references, zero warnings, no
+short/blank pages via the same `pdfplumber` check used earlier in this
+log).
+
+## 83. Targeted (non-uniform) fold — a few leaves per row get an extra split, on top of the existing uniform partition menu
+
+Ask: widen `op:multiquery`'s alignment-difficulty surface further (see
+entry 81's `sec:multilevel`) by letting a FEW buckets get extra fold
+depth, rather than the whole row uniformly the way `partition_menu`
+already does. Two things needed checking before writing code: does this
+have a sound mathematical basis, and does it actually add anything the
+uniform menu doesn't already give.
+
+**Not what it first sounded like.** "Higher degree for a few buckets of
+`S`" — the first framing — doesn't hold up: `obs:ratio`'s two-query
+attack works by taking a ratio of two proofs against the same
+commitment, and `S(r,j)` is identical in both regardless of what power
+it's raised to, so it cancels in the ratio no matter the exponent. The
+paper already says this plainly (`sec:differencing`: "blinding S(r,j)
+more heavily does not, by itself, address the interior-column
+exposure"). Confirmed this reading was a dead end before writing
+anything.
+
+**What does work: non-uniform group-folding.** Re-aimed at
+`sec:multilevel`'s own surface instead. `mul_group_hvec`/
+`mul_row_grouped` (the verifier-side reconstruction) already process
+each leaf generically by its own `(positions, A, B)` — nothing in them
+assumes leaves are the same size as each other, and the group-folding
+theorem they implement is stated for "a partition of positions into
+groups of any offset, stride, and size." `partition_menu`'s recipes
+being uniform-depth (every leaf split the same way, every level) was
+purely a generation choice, not a mathematical requirement. So "a few
+targeted leaves get one more split, the rest don't" was already covered
+by the existing proof — it just needed a new way to build and disclose
+such a partition.
+
+**Built:**
+- `Utils._split_leaf` (ms6 + vs6 `utils6.py`): the one-leaf version of
+  `build_partition`'s own row-major/transposed split, factored out so
+  both `build_partition` and the new function share one implementation
+  instead of two copies drifting apart.
+- `Utils.build_targeted_partition(base_partition, targets)` (ms6 + vs6):
+  takes an already-built partition and a list of `(leaf_idx,
+  orientation, q)`, replaces just those leaves with their own split,
+  leaves everything else untouched.
+- `ms6.core._finish_ps6`: after drawing the existing base recipe choice,
+  each row now also independently draws 0 to `DEFAULT_MAX_FOLD_TARGETS`
+  (3) of that base partition's own leaves to split one level deeper —
+  same RNG source (`gen`, `SystemRandom`) as every other per-row draw,
+  same "never derived from iset" reasoning as the base choice itself
+  (see entry 81/`ms6_vibe.md`'s own account of why `q_chunk_size` was
+  rejected). Disclosure grew from `(choice_idx, sweep)` to `(choice_idx,
+  targets, sweep)` per row.
+- `vs6.core._vs6_batch`: rebuilds the same partition via
+  `build_partition` then `build_targeted_partition`; no changes needed
+  to the actual reconstruction math.
+
+**Verified before wiring, same discipline as entry 81:**
+- 490 randomized trials (`L` in {10, 20, 100}, random base recipes,
+  0-3 random targeted leaves each) confirming
+  `mul_row_grouped(eval_row_grouped(...))` over a targeted partition
+  reconstructs the exact same `h_d` target `vsum_level_fold_mod` gives
+  directly — plus coverage checks (every targeted partition still
+  partitions `{0,...,L-1}` without overlap or gap) and error-path checks
+  (targeting the same leaf twice raises `ValueError`).
+- `ms6.utils6.Utils.build_targeted_partition` vs. its `vs6` copy: bit-
+  identical across 50 randomized trials.
+- `tests/test_parity.py` extended with a dedicated targeted-fold block:
+  copy parity across every menu recipe's own random targeted variant,
+  reconstruction-against-ground-truth for each, and the duplicate-leaf_idx
+  error check.
+- `tests/test_leak.py`'s `gen.randrange` monkeypatch (pins the base
+  choice to `'flat'`) turned out to also pin the new targets draw to
+  empty for free, since it's one more `gen.randrange` call — updated the
+  test's unpacking and added an explicit assertion that `targets == []`
+  under the pin, rather than relying on that being incidental.
+- End-to-end: full commit/open/verify round trips across 5 randomized
+  configurations (varying `n`, `d`, `chunk_size`, `batch_size`, claim
+  count) plus a tampered-claim rejection check, all correct; confirmed
+  targeted rows actually occur in practice (not just reachable in
+  theory). Full suite green (103 checks) after wiring.
+- Cost is real, as expected: a row that draws targets pays the larger
+  degree-`1..d` sweep for each targeted leaf (same cost shape
+  `sec:multilevel`'s own multi-group disclosure already has), measured
+  at roughly 2-3x a comparable untargeted row's proving cost for a small
+  sample — matching the "a FEW leaves pay it, not the whole row" design
+  intent rather than a claim of being free.
+
+**Security framing, same honesty as the base multi-level fold:** this
+widens the space of distinct row decompositions an adversary combining
+several permitted proofs would need to align — defense-in-depth, not a
+closure of `op:multiquery`. `S(r,j)` being fixed for the life of the
+commitment is untouched by it, exactly like the uniform menu it extends.
+
+Not yet done: the eprint (`ms6_eprint_part2.tex`) is deliberately NOT
+updated for this — explicit instruction to hold off until the protocol
+is finalized, so `sec:multilevel` still describes only the uniform menu
+as of this entry. `fold6.py` remains unwired (entry 82); this entry's
+targeted fold is unrelated to it (this is about which COLUMNS get
+grouped how, not about degree composition).
+
+## 84. `d` moved out of the public `params` dict (pre-shared only); verifier-side degree-composition folding investigated and rejected
+
+Prompted by: "can we hide the `d` value completely from verifier and only
+pass the pairs values (instead of pairs we can call it keys/values) from
+`fold6.comb_pairs`?"
+
+**What "hide `d`" can and can't mean.** `d` is an input to the
+reconstruction algorithm itself, not descriptive metadata: `vs6` has to
+walk `combinations_with_replacement` at the *same* degree the prover used
+to correctly pair X-side (its own claimed values) against Y-side (the
+prover's disclosed sweep) via the Hadamard-factorization trick. A
+legitimate verifier structurally cannot avoid knowing `d`. Checked whether
+renaming/restructuring the disclosed sweep (`fold6.comb_pairs`'s "keys/
+values" framing) could at least hide `d` from anyone who sees a *disclosed
+proof* — it can't: `eval_level_mod(d, values, mod)`'s sweep length is
+exactly `d*(chunk_size-1)+1` (verified directly, `chunk_size` in
+`{10, 40}`, `d` in `{2,3,4}`, exact match every time), so `d` is
+recoverable from the shape of any real opening alone, regardless of what
+its contents are called. The only real, available move is narrower: stop
+putting `d` in the *params blob* a bare-`c`-holder (no opening at all)
+would see — which is already the weakest party in this protocol.
+
+**Refactor: `d` removed from `PARAM_KEYS`, made a separate required
+argument.** `ms6.core`/`vs6.core`'s `PARAM_KEYS` dropped `"d"` (now `q`,
+`chunk_size`, `batch_size`, `mod`, `seal_batch_size`, `rand_edge_size`);
+`make_params` no longer takes or returns it. `ps6`, `ps6_governed`, and
+`vs6` all gained `d` as its own required positional argument (right after
+`params`), validated standalone via a new `_validate_d` (`d` must be a
+positive int) in both copies, since it no longer rides through
+`_validate_params`'s structural checks. `Commitment.d` already existed as
+an attribute (unchanged) — callers now source `d` from there the same way
+they'd have read it out of `params` before. `expect=` can no longer pin
+`d` (it isn't a `params` key any more); passing the wrong `d` to `vs6` was
+checked empirically across 8 randomized trials (varying seed, `d`,
+`chunk_size`, `batch_size`, and whether the wrong `d` was higher or lower
+than the true one) — never verifies silently. A lower wrong `d`
+reconstructs a different row-seal and fails the final `h == c` check
+(`AssertionError`); a higher wrong `d` typically indexes past the end of a
+sweep whose length was fixed by the prover's true, lower degree
+(`IndexError`).
+
+Updated every call site: `tests/harness.py`'s `proves`/`proves_with_expect`
+helpers, all twelve test modules that call `ps6`/`vs6`/`ps6_governed`/
+`make_params` directly (not just through the harness helpers), both
+`examples/*.py` demo scripts, and the README's Quickstart/`params`/query-
+governance snippets (including rewriting the now-invalid
+`expect={"mod": MY_MOD, "d": 3}` example). `tests/test_params.py`'s old
+"wrong pinned `d` rejected" check — which relied on `d` being an `expect`
+key — was replaced with two direct checks (`vs6(..., wrong_d)` with
+`wrong_d` above and below the true value, asserting `AssertionError`/
+`IndexError`, never `ParamMismatch`) since that's what wrong `d` now
+actually produces. Full suite green (108 checks) after the change; both
+example scripts re-run end to end (payroll demo and the 120,000-record
+sanctions-screening demo) with no regressions.
+
+**Follow-up question, investigated and rejected: have the verifier fold
+deeper itself.** Proposal: prover discloses at a low "base" degree
+(`d0`, e.g. 3) via `fold6.py`'s `comb_pairs`/`eval_combinations`
+composition, and the verifier performs the remaining folding stages
+itself to reach the true, higher effective degree — hiding the
+*effective* degree from anyone who intercepts the disclosure, not just
+from a bare-`c`-holder, since the intercepted data would only reveal
+`d0`.
+
+The soundness gate is real but the cost kills it. `comb_pairs`/
+`eval_combinations` only compose correctly on the *raw, unbucketed*
+monomial list — `ieval`'s bucket aggregation (the thing that makes today's
+`h_d` sweep compact, `O(d * chunk_size)`) can only happen once, at the very
+end, after every stage; this is the same fact behind entry 82's negative
+result (bucketing between stages loses the cross-product information the
+next stage needs). So the prover can't hand the verifier a compact
+base-degree sweep and let it fold further — it has to hand over the full
+raw per-monomial breakdown, sized `C(chunk_size + d0 - 1, d0)`, combinatorial
+in `d0` and `chunk_size` rather than linear. Measured directly at a
+representative `chunk_size=40, d0=3`: 11,480 raw monomials versus 118
+elements in today's linear sweep — about 97x larger, and the gap widens
+with wider rows or higher `d0`. That's a strictly bigger, more granular
+disclosure of the row's own structure than the current construction
+makes — and the whole reason the current design discloses an aggregated
+sweep rather than raw monomials is to avoid reopening exactly the kind of
+leak `mul_combinations_mod` has (independently closed today at the data
+level via edge-column padding, per `tests/test_modulus.py`'s own
+docstring). Handing the verifier raw per-monomial values reopens that
+surface at a different layer, for no compute saving either — per entry
+82's finding, the verifier still needs data at the full effective degree
+by the later stages, so there's no efficiency win to offset the larger,
+leakier disclosure.
+
+**Conclusion:** the `d`-out-of-params refactor shipped (narrow, genuine
+improvement: hides `d` from a bare-`c`-holder, doesn't change what a real
+proof-observer learns). Verifier-side degree-composition folding was not
+implemented — a net loss, not a hardness gain, for the same underlying
+reason entry 82's staged-fold approach doesn't pay for itself. Recorded
+here as a second negative result on the same `fold6.py` identity, distinct
+from entry 82's (that one was about compute cost of composing degree at
+all; this one is about the disclosure-size cost of trying to use the same
+composition to narrow what a proof reveals).
+
+### Verified
+
+`eval_level_mod` sweep length `== d*(chunk_size-1)+1` exactly, `chunk_size`
+in `{10, 40}`, `d` in `{2,3,4}`. Wrong-`d`-at-verification behavior across
+8 randomized trials (seed/`d`/`chunk_size`/`batch_size` varied, both
+higher- and lower-than-true `wrong_d`): always raises (`AssertionError` or
+`IndexError`), never silently `True`. `python3 -c "import ms6.core"` /
+`import vs6.core"` clean after every edit (caught and fixed one
+self-introduced docstring/`"""` mismatch in `vs6/core.py` mid-edit, before
+running anything). Raw base-degree monomial count via `fold6.comb_pairs`
+at `chunk_size=40, d0=3`: 11,480, matching `C(42,3)` exactly, against
+today's 118-element linear sweep.
+
+Full suite: 108 checks, all green (`python3 -m tests`). Both
+`examples/payroll_audit_demo.py` and
+`examples/sanctions_screening_scale_demo.py` (120,000 records) re-run end
+to end post-refactor, no regressions, updatability/soundness/benchmark
+sections all correct.
+
+`docs/ms6_eprint_part2.tex` deliberately NOT touched for either part of
+this entry — explicit standing instruction to hold off on any eprint edit
+until the protocol is finalized.
+
+## 85. Two-stage degree fold: wired into the real row-seal, and made to compose with the multi-level group partition
+
+`ms6.core._seal_grid`'s row-seal changed shape (manual edit, outside this
+entry's own diff): instead of one flat `h_d(H1)` (`vsum_level_fold_mod(d,
+mod, values=H1, global_keys=True)`), it now folds `H1 = H*S^d` in two
+stages — `eval_level_mod(d, H1, mod, coef=True)` bucket-summed into an
+intermediate vector, then a second, ordinary degree-`d`
+`vsum_level_fold_mod` collapsing that vector to the row's final scalar.
+This entry covers verifying that construction end to end, fixing what it
+broke, and making it composable with the existing swappable multi-level
+partition (entries 76-79/83) so it's actually usable at the shipped
+`chunk_size=100` — not just replacing entries 75/82's rejected
+constructions with a new one that happens to work at toy sizes.
+
+**Ground rule honored throughout:** `docs/ms6_eprint_part2.tex` was not
+touched at any point in this entry, per the standing instruction to hold
+off until the protocol is finalized.
+
+### Negative results, established before any wiring
+
+Several staged-composition ideas were tested in isolation
+(`ms6/fold6_coef.py`, a user-maintained toy file rewritten across several
+iterations) before touching real files, extending entry 82's plethysm
+finding (composing `h_k` with `h_k` isn't `h_{k^2}`) to the coefficient-
+weighted case:
+
+- All-`coef=True` staged folding (`q` rounds of `eval_level_mod(k, vals,
+  mod, coef=True)` bucket-summed) reduces exactly to `S^(k^q)` — same
+  rank-1 root-extraction vulnerability as entry 75's rejected `(sum)^d`
+  construction, just reached by a different route.
+- `coef=True` for `q-1` rounds then `coef=False` for the last isn't
+  reducible to a function of the sum alone (varying values with the same
+  sum give different outputs — the same fact behind entry 82's Newton's-
+  identity finding), but the edge-bucket leak persists at the sweep's own
+  boundary and the ratio-cancellation attack (see below) still cancels out
+  cleanly there.
+- A three-way construction (two value vectors and a blinding vector, each
+  folded individually via `coef=False` `eval_level_mod` then combined via
+  `deep_prod`, then one outer `vsum_level_fold_mod`) is well-defined and
+  distinct from the naive `h_{k^2}` of the elementwise product, but became
+  the template for the real X/Y-split design below rather than a
+  standalone win.
+
+**Ratio-cancellation persists under the two-stage fold.** Built a standalone
+toy harness (`ms6/fold6_grid.py`) with a baseline (`two_level_H_baseline`,
+folding each item's own contribution individually then `deep_prod`-combining
+across items — correct but ~17ms/item at `chunk_size=40, d=3`, confirmed too
+slow to be the real construction) and confirmed numerically that the
+`obs:ratio` attack (two openings differing by a small claim-set change let
+an observer cancel `S(r,j)` out of the ratio between edge-bucket leaks) still
+works identically against the two-stage construction — the only change is
+the exponent an attacker inverts, `k^2` instead of `d`. Documented in
+[README](README.md#row-seal-the-two-stage-degree-fold) as "harder, not
+closed" rather than folded into the security story as a fix.
+
+**"Fold the oset side to a scalar during proof generation, multiply against
+the verifier's own claimed-side fold" — falsified numerically, not just
+argued.** The natural-sounding idea that the outer fold could run once on
+each side independently and be combined by a plain multiplication (moving
+compute from the verifier into proof generation) requires
+`two_stage(M ⊙ result) == two_stage(M) * two_stage(result)`, `⊙` the
+per-column Hadamard product `_ps6_batch`'s digit-count encoding actually
+produces. Direct computation, random `M`/`result`, `L∈{5,8}`, `d∈{2,3}`: the
+two sides never matched (4/4 mismatches). Same underlying fact as the
+`h_d(A+B) ≠ h_d(A)+h_d(B)` non-factorization the group-partition Cauchy
+product exists to handle correctly — a two-stage target built on top of a
+Hadamard split doesn't get a free pass just because the split changed from
+additive to multiplicative. Whether a *correct* version of "more of the fold
+in proof generation" exists remains open — flagged back to the user rather
+than guessed at further.
+
+### Bugs found and fixed along the way
+
+- **Incomplete manual reverts, twice.** `_seal_grid`'s `H = [[(hv * sv) %
+  mod ...]]` was missing `pow(sv, d, mod)` after a revert; `_ps6_batch` had
+  the same omission plus a stray variable rename (`Hrow` for `Srow`). Both
+  diagnosed via direct `git show HEAD` comparison and fixed to match
+  exactly.
+- **Copy-paste bug** in `_seal_grid`'s parallel-vs-sequential branches
+  (`for S1 in H` instead of `for S1 in S`) — user self-diagnosed, confirmed
+  by isolated reproduction.
+- **`eva_level_mod` typo** in `Utils.seal_row_mod` (the `workers>1` path of
+  `_seal_grid`) — silently broke only the parallel commit path
+  (`AttributeError`), surfaced by `test_sizing.py`'s parallelism check once
+  the real full suite ran (see below).
+- **`tests/run_all.py`'s `MODULES` list had been trimmed to just
+  `("round trip", test_roundtrip)`**, discovered mid-session via
+  `grep -c '\[PASS\]'` returning 2 instead of ~100 after a supposedly green
+  run. Restored to the full module list before trusting any further "all
+  checks passed" result — this was not caused by this entry's own edits,
+  and is called out here so it isn't mistaken for one.
+- **Wrong-`d` verification crashed instead of failing cleanly.** vs6()'s own
+  documented contract (entry 84: wrong `d` always raises `AssertionError` or
+  `IndexError`, never silently verifies) broke under the two-stage wiring —
+  a shape mismatch between the verifier's own `eval_level_mod` sweep and the
+  prover's disclosed `ps` now raised `deep_prod`'s generic `ValueError`
+  instead. Fixed by catching that `ValueError` in `mul_combinations_mod`
+  (`ms6/vs6` `utils6.py`) and re-raising as `IndexError`, restoring the
+  documented contract rather than widening it.
+
+### The positive result: a verified Hadamard X/Y split, then verified group composition
+
+**The two-stage fold has a sound disclosure split.** `mul_combinations_mod`
+gained a `coef` parameter: pairing the verifier's own `coef=True`
+`eval_level_mod(d, M, mod)` (the claimed side) against the prover's
+unchanged `coef=False` raw disclosure (the oset side) via `deep_prod`,
+combo-for-combo, fully reconstructs the two-stage fold's own stage-1
+bucket-summed vector for the *combined* row — because `M[p]^c *
+result[p]^c == (M[p]*result[p])^c` for every combo, algebraically, not by
+coincidence. Once that inner vector is reconstructed it's fully public, so
+stage 2 is an ordinary (non-bilinear) `vsum_level_fold_mod` call, no further
+secret-splitting needed. Verified 20/20 randomized `(L, N)` trials
+(`ms6/fold6_grid.py`'s `check_two_stage`) before wiring anything.
+
+Wired as a temporary flat bypass first (`_finish_ps6`/`_vs6_batch` emitting
+a single flat `eval_level_mod(d, ...)` sweep per row, bypassing the group
+partition entirely) to validate the split against the real prover/verifier
+data path, not just the toy harness. Round trip passed; full suite,
+restored to its real module list, did not — see bugs above.
+
+**Then: does the two-stage fold compose with the existing multi-level
+column partition?** This was the real question, since a flat
+`eval_level_mod(d, chunk_size, mod, coef=True)` pass at the shipped
+`chunk_size=100` costs ~330ms/row at `d=3` and ~11s/row at `d=4` (measured
+directly, live code) — the same combinatorial blow-up the group partition
+was built to avoid for the original `h_d` target, now paid again for the
+two-stage one. Derived and verified, in that order:
+
+- **Stage 1 composes exactly via a *binomial*-weighted Cauchy product**,
+  not the plain one `convolve_h_vectors_mod` uses for the original target.
+  `bucket_vec(V, d)` (stage 1's coefficient-of-`g_V(x)^d` output, `g_V(x) =
+  Σ V[j]x^j`) obeys `bucket_vec(A∪B, d) = Σ_i C(d,i) · shift(bucket_vec(A,i)
+  ⊛ bucket_vec(B,d-i), by |A|·(d-i))` — the binomial expansion of `(g_A +
+  g_B)^d`, algebra not guesswork. Verified bit-exact against the flat
+  computation across 2-way and 4-way splits, several group sizes and
+  degrees, before touching real partition leaves.
+- **Stage 2 needed one fix to compose correctly, not skip grouping
+  entirely**: `vsum_level_fold_mod(global_keys=True)` weights entries by
+  *list position*, not by their idx label, and the flat path's ascending-
+  idx ordering (a side effect of how `combinations_with_replacement` visits
+  combos, not a documented contract) has to be reproduced explicitly by
+  sorting the group-assembled bucket vector before folding — confirmed by
+  isolating this exact mismatch (bucket sets matched, folded scalars
+  didn't, until the sort was added).
+- **Verified against real `partition_menu`/`build_partition` leaves**, not
+  just contiguous toy blocks: row-major, transposed, and nested
+  (`[('row-major',2),('transposed',3)]`) recipes, `d∈{2,3,4}`, and — the
+  version that actually matters — the full bilinear claimed/oset split
+  (not a single known vector), all bit-exact against the flat two-stage
+  computation.
+- **Performance, `chunk_size=100`, `d=3`**: flat 327ms/row → groups of 20:
+  31ms (10.5x) → groups of 10: 17ms (18.8x). At `d=4`: flat 10.6s/row →
+  groups of 10: 60ms (180x). Group size trades combinatorial cost against
+  disclosure size and edge-leak surface, same tradeoff shape as the
+  original single-stage grouping decision.
+
+Wired for real: `eval_level_mod` gained a `keyed=` parameter (returns
+`{idx: [...]}` instead of discarding idx once `list(r.values())` is taken —
+every existing caller is unaffected, since they only ever relied on shared
+enumeration order, not explicit idx labels). New verifier-side functions
+`mul_combinations_bucket_vec` (stage 1 alone, kept as a vector),
+`mul_group_bucket_vec` (one group's own bucket vector at every degree
+`0..d`, idx remapped from local to true-column numbering via that leaf's
+own `(A, B)`), `convolve_bucket_vecs_mod` (the binomial-weighted product
+above), and `mul_row_grouped_two_stage` (the row-level driver, single-group
+special case included) — mirrored into both `ms6/utils6.py` and
+`vs6/utils6.py` per the existing duplication convention.
+`ms6.core._finish_ps6` restored to the pre-bypass `(choice_idx, sweep)`
+disclosure format (git `HEAD`'s own structure — the separate targeted-fold
+layer from entries 83/57 was not restored; it existed only in an
+uncommitted state that didn't survive several manual reverts this session,
+and is a possible future addition, not a regression introduced here) using
+`eval_row_grouped` **completely unchanged** — stage 1's Y-side requirement
+(`coef=False`, raw, per group per degree) doesn't depend on what the
+verifier's X-side coefficient choice is, so the same disclosure now serves
+either reconstruction (`mul_row_grouped` for the original target,
+`mul_row_grouped_two_stage` for the shipped one) depending only on which
+function `_vs6_batch` calls. `vs6.core._vs6_batch` switched to
+`mul_row_grouped_two_stage`.
+
+`tests/test_leak.py` updated for the restored 2-tuple `(choice_idx, sweep)`
+shape (was asserting a 3-tuple with `targets`, left over from the
+never-fully-landed targeted-fold format) — the leak analysis itself needed
+no other change, since it examines the prover's own disclosed sweep, which
+`eval_row_grouped` produces identically regardless of which target the
+verifier reconstructs.
+
+### Security posture, stated plainly
+
+The two-stage fold and the group-composition work in this entry are two
+different kinds of change and neither closes an existing gap:
+
+- **Group composition is a performance fix only.** It reconstructs the
+  exact same two-stage target through the exact same disclosure
+  (`eval_row_grouped`'s output, byte-identical either way) — verified
+  bit-exact against the flat computation throughout. It cannot change the
+  leak profile because it changes nothing about what's disclosed.
+- **The two-stage fold itself does not close `obs:ratio`** (still fully
+  recovers a differing claimed item's own digit via ratio-cancellation,
+  just needs a `k^2`-order root instead of a `d`-order one — mitigated only
+  by `QueryGovernor`, same as before) **or the KNOWN LEAK** (edge-column
+  extraction via singleton buckets — same disclosure, same edge-padding
+  mitigation, unaffected).
+- What it was pursued for, per the original motivating question ("let the
+  verifier do the heavy lifting... will it add hardness to the guessing
+  game?"), is reaching a higher effective degree/hardness cheaply — real,
+  but modest, and orthogonal to both documented leaks.
+
+### Verified
+
+Full suite green: **98/98 checks**, `python3 -m tests`, after the group
+composition wiring (up from 67/98 under the flat bypass, which failed at
+`test_leak.py`'s format assumption before the disclosure format was
+restored). `tests/run_all.py`'s `MODULES` list confirmed to match its
+current, intentional 11-module content (`test_higher_degree.py` and its
+own entry — added in entry 82 — were removed from the tree and the module
+list outside this entry's own diff; treated as deliberate cleanup, not
+reverted). `.gitignore` gained a `fold6/` entry (the toy/probe files used
+throughout this entry, relocated to their own top-level folder, were never
+meant to ship). `README.md` gained a "Row-seal: the two-stage degree fold"
+section and an updated `Security` bullet reflecting the current
+reconstruction path names; check count corrected from 78 to 98.
+
+`docs/ms6_eprint_part2.tex` was not touched anywhere in this entry.

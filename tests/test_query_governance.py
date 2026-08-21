@@ -158,14 +158,14 @@ def run(check):
     c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, p_u = C.opening()
     real_gov = QueryGovernor(batch_size=U_BS)
 
-    ps_1 = ps6_governed(real_gov, {1}, h_u, hm_u, s_u, p_u)
+    ps_1 = ps6_governed(real_gov, {1}, h_u, hm_u, s_u, p_u, C.d)
     check("governance    : first real opening (via ps6_governed) succeeds "
           "and still verifies",
-          vs6(c_u, {1: C.vals[1]}, ps_1, x_u, perm_u, h1s_u, p_u))
+          vs6(c_u, {1: C.vals[1]}, ps_1, x_u, perm_u, h1s_u, p_u, C.d))
 
     e2e_blocked = False
     try:
-        ps6_governed(real_gov, {1, 0}, h_u, hm_u, s_u, p_u)   # {1} -> {0,1}: diff 1
+        ps6_governed(real_gov, {1, 0}, h_u, hm_u, s_u, p_u, C.d)   # {1} -> {0,1}: diff 1
     except QueryPolicyViolation:
         e2e_blocked = True
     check("governance    : ps6_governed refuses the second real opening "
@@ -175,7 +175,7 @@ def run(check):
     # still goes through fine -- this is a policy layer, not a lockout
     e2e_ok = True
     try:
-        ps6_governed(real_gov, {1, 2, 3, 4, 5}, h_u, hm_u, s_u, p_u)
+        ps6_governed(real_gov, {1, 2, 3, 4, 5}, h_u, hm_u, s_u, p_u, C.d)
     except QueryPolicyViolation:
         e2e_ok = False
     check("governance    : a legitimately different follow-up claim on "

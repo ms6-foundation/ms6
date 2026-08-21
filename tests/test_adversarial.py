@@ -57,8 +57,8 @@ def run(check):
 
     def verify(claims, ps_list=None):
         if ps_list is None:
-            ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, workers=WORKERS)
-        vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=WORKERS)
+            ps_list = ps6(claims.keys(), h_list, hm_list, s_list, params, d, workers=WORKERS)
+        vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=WORKERS)
 
     # 1. single claim, single batch
     claims1 = {5: vals[5]}
@@ -91,7 +91,7 @@ def run(check):
 
     # 7. tampered claim (+1)
     claims7_true = {5: vals[5], 45: vals[45]}
-    ps7 = ps6(claims7_true.keys(), h_list, hm_list, s_list, params, workers=WORKERS)
+    ps7 = ps6(claims7_true.keys(), h_list, hm_list, s_list, params, d, workers=WORKERS)
     claims7_bad = {5: vals[5] + 1, 45: vals[45]}
     expect_reject("tampered claim (+1)", lambda: verify(claims7_bad, ps7))
 
@@ -108,7 +108,7 @@ def run(check):
     expect_reject("cross-batch value swap", lambda: verify(claims10_bad, ps7))
 
     # 11. proof for a DIFFERENT iset than what's actually claimed (iset/claims mismatch)
-    ps11 = ps6([5], h_list, hm_list, s_list, params, workers=WORKERS)
+    ps11 = ps6([5], h_list, hm_list, s_list, params, d, workers=WORKERS)
     claims11 = {45: vals[45]}   # claiming idx 45 but proof only opened idx 5
     expect_reject("claims/proof iset mismatch", lambda: verify(claims11, ps11))
 
@@ -123,7 +123,7 @@ def run(check):
     x0 = x_list[0]
     fake_hm_row = chunk_of(fake_h1s, x0, chunk_size)
     hm_list_fake[0][5] = fake_hm_row
-    ps12 = ps6([5], h_list, hm_list_fake, s_list, params, workers=WORKERS)
+    ps12 = ps6([5], h_list, hm_list_fake, s_list, params, d, workers=WORKERS)
     claims12 = {5: vals[5]}
     expect_pass("hm[iset] tampered (claimed pos), TRUE val claimed -> no-op, still verifies",
                 lambda: verify(claims12, ps12))
@@ -145,7 +145,7 @@ def run(check):
     fake_h1s2 = M.ut.domain_hash(f"{M.H1_TAG}:{h1_salt_list[0]}:{fake_val2}".encode())
     fake_hm_row2 = chunk_of(fake_h1s2, x0, chunk_size)
     hm_list_fake2[0][12] = fake_hm_row2   # position 12: same batch (0) as claimed pos 5, itself unclaimed
-    ps14 = ps6([5], h_list, hm_list_fake2, s_list, params, workers=WORKERS)
+    ps14 = ps6([5], h_list, hm_list_fake2, s_list, params, d, workers=WORKERS)
     claims14 = {5: vals[5]}
     expect_reject("hm[oset] tampered (unclaimed pos, same batch), claim true val elsewhere",
                   lambda: verify(claims14, ps14))

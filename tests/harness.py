@@ -60,18 +60,20 @@ class Checker:
 
 def proves(C, idxs):
     """A claim over a commitment, through the unmodified ps6/vs6 path --
-    Commitment.opening() returns ms6()'s own tuple, params included."""
+    Commitment.opening() returns ms6()'s own tuple, params included. d is
+    no longer part of that dict (see ms6.core.PARAM_KEYS's own comment) --
+    C.d is passed to ps6/vs6 explicitly instead."""
     c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, p_u = C.opening()
     cl = {i: C.vals[i] for i in idxs}
-    ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u)
-    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u)
+    ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u, C.d)
+    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u, C.d)
 
 
 def proves_with_expect(C, idxs, expect):
     c_u, h_u, x_u, s_u, hm_u, perm_u, h1s_u, p_u = C.opening()
     cl = {i: C.vals[i] for i in idxs}
-    ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u)
-    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u, expect=expect)
+    ps_u = ps6(cl.keys(), h_u, hm_u, s_u, p_u, C.d)
+    return vs6(c_u, cl, ps_u, x_u, perm_u, h1s_u, p_u, C.d, expect=expect)
 
 
 def rebuilt(C, vals_now):

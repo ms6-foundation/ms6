@@ -70,8 +70,8 @@ def run(check):
             claims = {i: vals[i] for i in iset}
             total += 1
             try:
-                ps_list = ps6(iset, h_list, hm_list, s_list, params, workers=workers)
-                ok = vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, workers=workers)
+                ps_list = ps6(iset, h_list, hm_list, s_list, params, d, workers=workers)
+                ok = vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=workers)
                 if ok:
                     passed += 1
                 else:

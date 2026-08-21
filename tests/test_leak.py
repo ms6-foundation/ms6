@@ -152,8 +152,8 @@ def _mount(mod, vals):
     _orig_randrange = gen.randrange
     gen.randrange = lambda *a, **k: 0
     try:
-        ps_a = ps6(iset_a, hl, hml, sl, params)
-        ps_b = ps6(iset_b, hl, hml, sl, params)
+        ps_a = ps6(iset_a, hl, hml, sl, params, D)
+        ps_b = ps6(iset_b, hl, hml, sl, params, D)
     finally:
         gen.randrange = _orig_randrange
 
@@ -167,15 +167,23 @@ def _mount(mod, vals):
     combined_a = (row0_a * pow(S[r][0], D, mod)) % mod
     combined_b = (row0_b * pow(S[r][0], D, mod)) % mod
 
-    # ps_a[b][r] is now (choice_idx, sweep) -- sweep[0][0] unwraps back to
-    # the plain eval_level_mod(D, ...) bucket list this analysis is about
+    # ps_a[b][r] is (choice_idx, sweep) -- sweep[0][0] unwraps back to the
+    # plain eval_level_mod(D, ...) bucket list this analysis is about
     # (sweep[0] is group 0's -- the only group, under 'flat' -- own data,
     # itself a length-1 list holding just that one bucket list, since a
     # 'flat' choice discloses exactly one degree-D bucket list per row --
     # see eval_row_grouped's single-group special case). sweep[0][0][0] is
-    # then that bucket list's own idx=0 bucket -- the same value ps_a[b][r]
-    # (indexed [0]) itself used to BE, before the swappable fold wrapped
-    # it in (choice_idx, sweep).
+    # then that bucket list's own idx=0 bucket -- the same value
+    # ps_a[b][r] (indexed [0]) itself used to BE, before the swappable fold
+    # wrapped it in (choice_idx, sweep). The monkeypatch below forces every
+    # gen.randrange call to 0, which pins the base choice to 0 ('flat').
+    #
+    # This is examining the PROVER's own disclosed sweep, not the
+    # verifier's reconstruction -- eval_row_grouped's own output is
+    # unaffected by which row-seal target (h_d, or the two-stage fold
+    # _seal_grid now builds) the verifier reconstructs from it, see
+    # ms6.core._finish_ps6's own docstring -- so this leak analysis holds
+    # exactly as before regardless of that change.
     choice_a, sweep_a = ps_a[b][r]
     choice_b, sweep_b = ps_b[b][r]
     assert choice_a == 0 and choice_b == 0, "monkeypatch failed to pin 'flat'"
