@@ -771,8 +771,7 @@ files.
 > the verifier does not know. The code fixes are added to the ms6.py and
 > vs6.py.
 
-This corresponds to receiving Part B's S-side modulus-ring work (entries
-12–14: a separate `s_mod` for `S`'s `cell_product_mod`, full-width SHAKE-256
+This corresponds to receiving Part B's S-side modulus-ring work (entries 12–14: a separate `s_mod` for `S`'s `cell_product_mod`, full-width SHAKE-256
 blinding, `q` as `S`'s exponent) as an upload and integrating it.
 
 Confirmed via `diff` that `vs6.py` contains no reference to `s_mod` or
@@ -980,8 +979,7 @@ open items at once.
 
 ### Bugs caught while installing (diffed against the working copy first)
 
-- **Reintroduced `vs6.py` `workers>1` bug** — the exact bug fixed in entry
-  26, back again in this upload's `_vs6_batch`, apparently branched from
+- **Reintroduced `vs6.py` `workers>1` bug** — the exact bug fixed in entry 26, back again in this upload's `_vs6_batch`, apparently branched from
   before that fix landed. Fixed again, with an explanatory comment added
   in the code this time.
 - **File misnamed on upload** — the fourth file was `verifier_utils.py`,
@@ -1009,11 +1007,11 @@ re-run clean end-to-end.
 > `x_list` run-to-run variation.
 
 Both were Part C's own open items (below). Closing the second turned out to
-be more than cosmetic — see entry 31.
+be more than cosmetic — see entry 30.
 
 ---
 
-## 31. Size `x` from actual item hash widths, not the salt
+## 30. Size `x` from actual item hash widths, not the salt
 
 ### The problem, restated precisely
 
@@ -1055,12 +1053,12 @@ the random salt draw each commit still makes), confirmed PASS.
 
 ---
 
-## 32. Guard `append()`/`replace()` against over-wide items
+## 31. Guard `append()`/`replace()` against over-wide items
 
-Entry 31's fix only covers a *new* batch, sized once from its own items at
+Entry 30's fix only covers a *new* batch, sized once from its own items at
 construction time. `append()`/`replace()` edit an *existing* batch's counts
 directly (`_apply_rows`), so the identical silent-truncation risk described
-in entry 31 was still open on the incremental-update path.
+in entry 30 was still open on the incremental-update path.
 
 ### What changed
 
@@ -1093,7 +1091,7 @@ adversarial suite (both exercise `ms6()`/`ps6()`/`vs6()` directly, not
 
 ---
 
-## 33. Parallelize `Commitment`'s initial multi-batch construction
+## 32. Parallelize `Commitment`'s initial multi-batch construction
 
 Closes Part C's other open item: `Commitment.__init__` looped sequentially
 over `_new_batch` regardless of `workers`, unlike `ms6()`'s own
@@ -1124,7 +1122,7 @@ bit-identical tuples. PASS.
 
 ## Full regression pass (Part E)
 
-Run after entries 31–33 landed:
+Run after entries 30–32 landed:
 
 - `ms6.py`'s own `__main__`: **32/32 PASS** (28 pre-existing + 4 new: `x_list`
   determinism, the `_check_fits` rejection check, and the parallel-vs-
@@ -1157,7 +1155,7 @@ Run after entries 31–33 landed:
   stages, narrated in-domain (HR payroll audit; sanctions-screening
   registry).
 
-## 34. `vsum_level_fold_mod` swap
+## 33. `vsum_level_fold_mod` swap
 
 **Request** — replace `ms6.py`'s remaining direct `vsum_level_mod` calls with
 `vsum_level_fold_mod`; close out any already-resolved Open Items.
@@ -1185,7 +1183,7 @@ Run after entries 31–33 landed:
 
 ---
 
-## 36. `DEFAULT_MOD` -> unknown-order composite (the RSA-2048 challenge number)
+## 34. `DEFAULT_MOD` -> unknown-order composite (the RSA-2048 challenge number)
 
 **Request** — "Please change the DEFAULT_MOD to unknown order prime in the
 ms6 project." Takes up the follow-up offered but not taken in entry 27:
@@ -1245,7 +1243,7 @@ unknown order.
 
 ---
 
-## 38. Two-armed leak test (`tests/test_leak.py`)
+## 35. Two-armed leak test (`tests/test_leak.py`)
 
 **Request** — "any recommendation to resolve open items given in the
 ms6_vibe.md file", then "please build two-armed leak test".
@@ -1288,34 +1286,10 @@ parameters having drifted so the attack no longer applies.
 
 ---
 
-## 39. `docs/ms6_eprint_v2.tex`
+## 36. The binding challenge: the accumulator was not injective
 
-**Request** — "what are the open items left in the ms6_eprint? Any
-suggestion to resolve those open items", then "Please create another
-version of ms6_eprint based on the current state of the ms6 project."
-
-The original write-up predated the params-dict contract, the tombstone
-deletion path, the cached seal tree, the unknown-order modulus and the
-tests package, so several of its open problems had since been closed in
-code and several of its descriptions no longer matched what runs.
-
-### What changed
-
-- New `docs/ms6_eprint_v2.tex` written against the current tree rather than
-  edited from the old one. Open problems went from 11 to 6 -- the ones
-  removed were closed by later entries, not waved away.
-- Added a section on what the unknown-order modulus does and does not
-  supply, which is what set up entry 40.
-- `docs/` is gitignored (the `.tex` is a working artefact, not shipped
-  code), and the earlier log entries that tracked `ms6_eprint.tex` edits
-  were removed from this file at the user's request.
-
----
-
-## 40. The binding challenge: the accumulator was not injective
-
-**Request** — the user pushed back on the framing in the paper: "The
-purpose of the ut.hash is not create the digest of the values but to
+**Request** — the user pushed back on the framing of `ut.hash`'s role:
+"The purpose of the ut.hash is not create the digest of the values but to
 explode the digits of the values for the accumulator to perform the grid
 multiplications. The security of the protocol is based on unknown order
 modulus ring, is that not sufficient enough for the binding and hiding of
@@ -1326,10 +1300,10 @@ This was right on two of three points and the third is what mattered.
 ### Findings
 
 - **Right about the hash's role.** `ut.hash` is a digit-exploder feeding
-  the grid, not a security digest. The paper had been describing it as
-  though collision resistance of the hash carried weight it does not carry.
+  the grid, not a security digest. It had been described as though
+  collision resistance of the hash carried weight it does not carry.
 - **Right about hiding.** The unknown-order ring is what supplies hiding;
-  entry 38 is the standing evidence.
+  entry 35 is the standing evidence.
 - **Wrong about binding, and the counterexample was cheap.** Binding needs
   the exponent map to be *injective*. It was not. `cell_product_mod` raised
   each digit to its own count and multiplied, so the digit *was* the base
@@ -1355,7 +1329,7 @@ which is only a problem when the digit is the base.
 
 ---
 
-## 41. Prime-digit encoding
+## 37. Prime-digit encoding
 
 **Request** — "What is the better strategy to replace the '0' before
 accumulation performs the grid multiplication. What other prime values we
@@ -1395,7 +1369,7 @@ prototype these changes and run the suite plus the leak test against it."
 - Leak test still separates: arm 1 recovers, arm 2 does not.
 - Split identity `cell(A u B) == cell(A) * cell(B)` survives the encoding
   change -- 200 randomised trials.
-- The specific collisions from entry 40 no longer collide, and the two
+- The specific collisions from entry 36 no longer collide, and the two
   batches that produced an identical commitment now produce different ones.
 - **Cost.** Isolated cell products are ~2.1x slower (ten bases instead of
   four, larger primes). End to end it is essentially free: at 1000 items,
@@ -1404,19 +1378,11 @@ prototype these changes and run the suite plus the leak test against it."
 
 ---
 
-## 42. Flattening the paper's history; stale-comment sweep
+## 38. Stale-comment sweep
 
-**Request** — "Please remove the comparison between the [old] hashing and
-new hashing and only add new hashing algorithm to the paper, as the paper
-has not yet published (don't need to track the changes)", then "Flattened
-those too", then "Cleanup the comments to remove any stalled comments."
+**Request** — "Cleanup the comments to remove any stalled comments."
 
-- `ms6_eprint_v2.tex` now presents the prime-digit encoding as the design,
-  with no old-vs-new framing anywhere. The *justification* for ten distinct
-  primes stayed (as `rem:prime-table`) -- that is not history, it is the
-  reason the encoding is shaped this way, and dropping it invites someone
-  to "simplify" it back into the collision.
-- Same rule applied to code comments. Removed:
+- Removed:
   - the `col_digit_counts` rationale block describing the four-prime
     factorisation and "four big-int powers per cell";
   - `cell_product`/`cell_pow_product` docstrings in both packages;
@@ -1439,11 +1405,11 @@ Drafting the open-items note, I wrote that the injectivity property was
 pinned by `test_adversarial` -- and it was not. Nothing in the suite
 guarded it. `test_parity` only checks that the `ms6` and `vs6` copies agree
 with each other, which a *colliding* encoding satisfies exactly as well.
-The property entry 41 was built to fix had no test.
+The property entry 37 was built to fix had no test.
 
 Added two checks to `test_adversarial`:
 
-- every collision from entry 40 (`{6}`/`{2,3}`, `{4}`/`{2,2}`, `{9}`/`{3,3}`,
+- every collision from entry 36 (`{6}`/`{2,3}`, `{4}`/`{2,2}`, `{9}`/`{3,3}`,
   `{8}`/`{2,2,2}`, `{1,1,1,6}`/`{2,3}`) must now separate;
 - exhaustively, no two distinct 4-digit multisets may share a cell value.
 
@@ -1459,38 +1425,35 @@ Added two checks to `test_adversarial`:
 
 # Part F — edge-column decoy padding, and a return to a prime modulus
 
-## 43. Benchmark performance pass; 256-bit vs 2048-bit comparison in the paper
+## 39. Benchmark performance pass; 256-bit vs 2048-bit comparison
 
 **Request** — "Any suggestion to improve the benchmark performance as the
 prime-digit-encoding has performance implication on commit," followed by
-"Run the benchmark DEFAULT_MODE 256 bit vs 2048 bit for workers=4 and
-update the Efficiency section in the ms6_eprint.tex."
+"Run the benchmark DEFAULT_MODE 256 bit vs 2048 bit for workers=4."
 
 - Profiled commit end to end. `gmpy2`-specific tricks and a Shamir's-trick
   multi-exponentiation variant were both dead ends for this workload.
   `DEFAULT_WORKERS` sitting at `1` was the real lever: `workers=4` gave a
   measured ~3.5x speedup on commit, independent of the prime-digit
-  encoding (entry 41) being in place or not.
-- Quantified entry 41's own regression directly, via a git-worktree A/B
+  encoding (entry 37) being in place or not.
+- Quantified entry 37's own regression directly, via a git-worktree A/B
   (old encoding vs. new, same machine, same run): roughly 15–25% slower
   commit, not the multiple this could plausibly have been, given the
   encoding widened every cell's base count from four primes to ten.
 - Ran the full commit/prove/verify/build/append/replace suite at
   `workers=4` under both the (then-current) RSA-2048 composite and a
-  256-bit prime, on the same 120,000-record synthetic registry, and wrote
-  the resulting ratios into `docs/ms6_eprint.tex`'s Efficiency section
-  (commit 1.50x, prove 3.42x, verify 2.19x, build 1.41x, append 1.29x,
-  replace 2.23x, composite over prime).
+  256-bit prime, on the same 120,000-record synthetic registry (commit
+  1.50x, prove 3.42x, verify 2.19x, build 1.41x, append 1.29x, replace
+  2.23x, composite over prime).
 
 ### Verified — 2026-08-12
 
-- Suite green at `workers=1` and `workers=4`, before and after entry 41's
+- Suite green at `workers=1` and `workers=4`, before and after entry 37's
   encoding change.
-- PDF recompiled cleanly with the new table; regenerated and handed off.
 
 ---
 
-## 44. Leak-mitigation attempt: wrap the singleton value — reverted
+## 40. Leak-mitigation attempt: wrap the singleton value — reverted
 
 **Request** — "wrap single combination that causes the leaks with
 vsum_level_mod(d, mod, values) in eval_level_mod in ps6 and
@@ -1524,7 +1487,7 @@ vsum_level_mod").
 
 ---
 
-## 45. Edge-column decoy padding (the leak fix that shipped)
+## 41. Edge-column decoy padding (the leak fix that shipped)
 
 **Request** — "pin point exact code where it causes the leaks," then:
 "Add random values at the edges of the bucket so the leaks only reveals
@@ -1538,7 +1501,7 @@ Traced the leak precisely first: `eval_level_mod` (`ms6/utils6.py`) through
 `_finish_ps6`/`ps6()` (`ms6/core.py`) to `mul_combinations_mod`
 (`vs6/utils6.py`) to `tests/test_leak.py`'s extraction.
 
-Design shift from entries 24 and 44: instead of changing the combinatorial
+Design shift from entries 24 and 40: instead of changing the combinatorial
 math (which broke multiplicativity twice), change *what data* occupies
 the leak-exposed columns, leaving `eval_level_mod`/`mul_combinations_mod`/
 `vsum_level_mod`/`vsum_level_fold_mod`/`_seal_grid` completely untouched.
@@ -1601,14 +1564,14 @@ the real repository.
 
 ---
 
-## 46. `DEFAULT_MOD` back to a 256-bit prime; comment cleanup; test rework
+## 42. `DEFAULT_MOD` back to a 256-bit prime; comment cleanup; test rework
 
 **Request** — "now change the DEFAULT_MOD to 256 bit prime and cleanup the
 comments and removed any stalled comments."
 
-Entry 36 moved `DEFAULT_MOD` to the RSA-2048 composite specifically to make
+Entry 34 moved `DEFAULT_MOD` to the RSA-2048 composite specifically to make
 the singleton-bucket leak's root extraction expensive (unknown group
-order). Entry 45 closes that same leak a different way — by ensuring the
+order). Entry 41 closes that same leak a different way — by ensuring the
 exposed value is decoy regardless of how easy it is to extract — which
 makes the composite's cost no longer worth paying. Switched `DEFAULT_MOD`
 in both `ms6/utils6.py` and `vs6/utils6.py` to a fixed, verified 256-bit
@@ -1645,59 +1608,18 @@ now that group order is no longer load-bearing.
 
 ---
 
-## 47. Paper rewrite: current design, not a changelog; new benchmark
+## 43. New benchmark script (`docs/bench_efficiency.py`)
 
-**Request** — "Update the paper without writing history to reflect the
-current design of the ps6 and add new benchmark," then "copy the chat
-history to the ms6_vibe.md and then push the changes to a new branch
-called rand-edge."
+**Request** — "Any suggestion to improve the benchmark performance," then
+"copy the chat history to the ms6_vibe.md and then push the changes to a
+new branch called rand-edge."
 
-`docs/ms6_eprint.tex` had been built, entry by entry, as a running record
-of an attack-then-fix cycle (its own title said as much: "...and a
-Differencing Attack on Its Hiding Property"). With entry 45's decoy
-padding in place, that framing was no longer accurate — the "attack"
-section described a confidentiality break the current construction does
-not have. Rewrote it to describe the current design directly:
-
-- Title: "...with Decoy-Padded Edge Columns," dropping the attack framing.
-- Status box and abstract rebuilt around the current claim: the
-  singleton-bucket exposure is structural and unremoved, but neutralized
-  at the data level, verified numerically rather than argued from modulus
-  hardness.
-- New parameter-table row for `rand_edge_size`; `DEFAULT_MOD`'s row and
-  the modulus remarks rewritten around a 256-bit prime chosen for cost.
-- New construction subsection formally describing the decoy mechanism,
-  with a stated theorem ("edge columns carry no real digest content") and
-  a remark on why the digits are deterministic rather than secret-random
-  — mirroring entry 45's own design reasoning.
-- The old "differencing attack" section restructured into "structural
-  exposure ... and its neutralization": kept the singleton-bucket
-  lemma/proposition/corollary (still correct math), reframed the old
-  `Attack`/`Theorem` pair as an `Observation` about what a differencing
-  ratio still computes and why it's now inert, and rewrote the
-  verification subsection around entry 46's two-arm test.
-- Removed the old "Toward a fix" section (the hidden-order-modulus
-  argument); folded what's still relevant into a remark on why the
-  modulus is chosen for cost now.
-- Binding section's "composite of unknown order" language generalized to
-  the modulus in general, since binding never depended on that choice.
-- Caught and fixed an unrelated pre-existing inconsistency while in the
-  file: the Notation section still claimed a `0`->`1` digit remap (a
-  9-way alphabet) from a much earlier design, contradicted by the Domain
-  Hash section and by the actual code (`DIGIT_PRIMES` has ten entries,
-  all ten digits used distinctly). Fixed both the claim and the
-  downstream "9-way search" wording.
-- New `docs/bench_efficiency.py` (committed for reproducibility), run at
-  `workers=4` under current defaults against the same 120,000-record
-  registry used in entry 43: commit 1.25s, prove 102ms avg, verify 81ms
-  avg, build 89ms, append 11.0ms, replace 13.6ms. Noted the decoy
-  padding's overhead is a fixed, small per-row constant (`E/L` = 15% more
-  columns at default sizing), not scale-dependent.
-- Related Work, Open Problems, and Conclusion updated to match — in
-  particular the open hiding-proof problem is now framed around the
-  domain hash's one-wayness rather than a factoring/RSA assumption on the
-  accumulator modulus, since that's the actual residual assumption left
-  once entry 45 is in place.
+New `docs/bench_efficiency.py` (committed for reproducibility), run at
+`workers=4` under current defaults against the same 120,000-record
+registry used in entry 39: commit 1.25s, prove 102ms avg, verify 81ms
+avg, build 89ms, append 11.0ms, replace 13.6ms. Noted the decoy padding's
+overhead is a fixed, small per-row constant (`E/L` = 15% more columns at
+default sizing), not scale-dependent.
 
 This entry, and the rest of this file's history above it, is the "chat
 history" copied into `ms6_vibe.md` per the request — appended rather than
@@ -1706,22 +1628,19 @@ convention.
 
 ### Verified — 2026-08-12
 
-- `pdflatex` (three passes, to settle cross-references): 19 pages, no
-  undefined references, no errors.
-- Full suite re-run after the paper changes (code untouched in this step):
-  still green.
+Full suite re-run: still green.
 
-## 48. `DEFAULT_MOD` back to the RSA-2048 composite; efficiency comparison
+## 44. `DEFAULT_MOD` back to the RSA-2048 composite; efficiency comparison
 
 **Request** — "Please revert the DEFAULT_MOD 2048 unknown order modulus
 and compare the efficiency with 256 bit prime," confirmed as a permanent
 revert (not just a one-off measurement) when asked to disambiguate.
 
-Reverted entry 46's constant back to the RSA-2048 Factoring Challenge
+Reverted entry 42's constant back to the RSA-2048 Factoring Challenge
 composite in both `ms6/utils6.py` and `vs6/utils6.py`, and rewrote the
-comments touched by entry 46 to match: `DEFAULT_MOD`'s own comment now
+comments touched by entry 42 to match: `DEFAULT_MOD`'s own comment now
 frames unknown group order as a second, independent layer on top of the
-edge-column decoy padding (entry 45) rather than something decoy padding
+edge-column decoy padding (entry 41) rather than something decoy padding
 made unnecessary — the two are not in tension, decoy padding just means
 the modulus is no longer the *only* thing standing in an extractor's way.
 `mul_combinations_mod`'s KNOWN LEAK docstring updated the same way.
@@ -1729,11 +1648,11 @@ the modulus is no longer the *only* thing standing in an extractor's way.
 - `tests/test_leak.py`'s two-arm structure swapped roles: ARM 1 is now
   `DEFAULT_MOD` itself (composite, extraction must FAIL), ARM 2 is a
   freshly generated prime (known order, extraction must SUCCEED) — the
-  inverse of entry 46's assignment. Caught a real bug while doing this:
+  inverse of entry 42's assignment. Caught a real bug while doing this:
   the ARM 2 setup asserted `gcd(d, p-1) == 1` on a single fresh draw
   rather than retrying, and D=3 makes that fail for ~half of random
   primes (any p == 1 mod 3) — not the "exceedingly unlikely" case the
-  comment (copied from entry 46, where the prime was fixed rather than
+  comment (copied from entry 42, where the prime was fixed rather than
   freshly drawn each run) claimed. Fixed with a retry loop; reran the
   suite three times back to back to confirm the flake is gone.
 - `tests/test_modulus.py`'s assertion reverted from "256-bit prime" to
@@ -1762,14 +1681,8 @@ identical in both arms (it doesn't depend on modulus choice or size).
 Prove/verify (dominated by `pow(..., D, mod)` at every leaf, scaling with
 the modulus's bit length) show the largest gap (2-3x); commit/build/
 append (dominated by the digit-counting and folding passes, which don't
-scale with modulus size) show a much smaller one (~1.2x). This is the
-`docs/ms6_eprint.tex` Efficiency table's shape, just at 2048 vs 256 bits
-instead of the entry-43/47 comparison — the paper's own text was not
-re-touched this entry, since the request was scoped to the code revert
-and a measurement, not another rewrite; its `Remark~\ref{rem:mod-choice}`
-currently still argues for a 256-bit prime as the shipped default, which
-now describes a design this session moved away from again. Left as-is
-pending an explicit request to reconcile it.
+scale with modulus size) show a much smaller one (~1.2x) — the same shape
+as the entry-43/47 comparison, just at 2048 vs 256 bits.
 
 ### Verified — 2026-08-12
 
@@ -1781,12 +1694,12 @@ pending an explicit request to reconcile it.
 # Open items
 
 - **The root-extraction leak (entry 23) is closed at the source and now
-  verified numerically (entries 27, 36, 38).** Entries 12–14/25 seal the
+  verified numerically (entries 27, 34, 35).** Entries 12–14/25 seal the
   *value* that leaks (`S[j]`) behind a modulus ring the verifier doesn't
-  know; entry 36 moved the H-side ring itself off a public prime (known
+  know; entry 34 moved the H-side ring itself off a public prime (known
   order) onto the RSA-2048 Factoring Challenge composite (unknown order),
   closing the root-extraction step the entry-23 differencing attack
-  depends on. Entry 38's two-armed test supplies the missing measurement:
+  depends on. Entry 35's two-armed test supplies the missing measurement:
   the same attack SUCCEEDS under a prime modulus (positive control) and
   does not recover the column under the unknown-order default.
 
@@ -1797,8 +1710,7 @@ pending an explicit request to reconcile it.
   proof. Anyone uncomfortable with that should pass their own `mod`; the
   modulus travels in `params` and nothing is baked in (`test_modulus`).
 
-- **Binding now rests on the encoding, not on the modulus (entries
-  40–41).** The unknown-order ring supplies hiding but cannot supply
+- **Binding now rests on the encoding, not on the modulus (entries 36–37).** The unknown-order ring supplies hiding but cannot supply
   injectivity that the encoding threw away first; `DIGIT_PRIMES` restores
   it by unique factorisation. This is the property to protect in any
   future change to the grid layout -- a "compact" re-encoding that maps
@@ -1806,77 +1718,36 @@ pending an explicit request to reconcile it.
   show up as a test failure anywhere except in the specific collisions
   `test_adversarial` pins.
 
-- **Update (entry 45): the root-extraction leak is now closed at the data
+- **Update (entry 41): the root-extraction leak is now closed at the data
   level, not just made expensive.** The bullet above (still accurate as a
-  record of where things stood after entry 38) reflected a design where
+  record of where things stood after entry 35) reflected a design where
   the singleton bucket's exposed value was real data, protected only by
-  the cost of extracting it. Entry 45 changes what fills that bucket:
+  the cost of extracting it. Entry 41 changes what fills that bucket:
   the columns a root extraction can ever reach are reserved for digits
   derived deterministically from the item's own hash, disjoint from where
   real digit content is written. A successful extraction now recovers
   decoy content regardless of how cheap or expensive extraction is —
   verified directly (`_decoy_only_col0` in `tests/test_leak.py`), not
-  inferred from one modulus's arithmetic being hard. This is why entry 46
+  inferred from one modulus's arithmetic being hard. This is why entry 42
   could move `DEFAULT_MOD` back to a 256-bit prime: the RSA-2048
-  composite's trust assumption (entry 27/36, restated above) is no longer
+  composite's trust assumption (entry 27/34, restated above) is no longer
   load-bearing for this property, so there's no reason to keep paying for
   it. It remains true that binding (the bullet below) does not depend on
   this choice either way.
 
-- **Update (entry 48): `DEFAULT_MOD` is back to the RSA-2048 composite.**
-  The bullet directly above (entry 46's reasoning) is still correct as an
+- **Update (entry 44): `DEFAULT_MOD` is back to the RSA-2048 composite.**
+  The bullet directly above (entry 42's reasoning) is still correct as an
   argument that decoy padding alone is *sufficient* — it's just no longer
-  what's shipped. Entry 48 reverted the constant to keep unknown group
+  what's shipped. Entry 44 reverted the constant to keep unknown group
   order as a second, independent layer rather than relying on the decoy
   mitigation being the only thing standing between an extractor and real
   data, at the measured cost of prove/verify running ~2-3x slower than
-  under a 256-bit prime (see entry 48's efficiency table). Whether to
+  under a 256-bit prime (see entry 44's efficiency table). Whether to
   stay on the composite, the prime, or make it a deployment-time choice
   is a cost/trust tradeoff, not a correctness question — nothing above
   about the decoy property or binding depends on which one is default.
 
-## 49. Paper reconciled to the RSA-2048 default; efficiency section rewritten
-
-**Request** — "Please update the efficiency section in the paper and
-convert it to pdf," arriving mid-turn while entry 48's code revert was
-still being verified.
-
-Entry 48 reverted the shipped modulus in code but left `docs/ms6_eprint.tex`
-arguing for the *previous* design (256-bit prime as default) in several
-places, not just the Efficiency table — `Remark~\ref{rem:mod-choice}`, the
-parameter table's `p` row, the status box, the two-arm leak-verification
-description, and the conclusion all still asserted a 256-bit prime was
-shipped. Treated as one consistency sweep rather than touching only the
-named section, since leaving the rest contradicting it would make the
-paper internally inconsistent:
-
-- `Remark~\ref{rem:mod-choice}` rewritten from "the modulus no longer
-  carries this property, so it's a fixed 256-bit prime" to "the modulus is
-  a cost/defense-in-depth trade-off, not a requirement" — states the
-  shipped RSA-2048 composite is kept as an independent second layer, cites
-  the measured 2-3x prove/verify cost of that choice, and points out a
-  caller can pass any `mod=` they prefer.
-- Efficiency section rebuilt as a genuine two-column comparison table
-  (2048-bit vs. 256-bit, both arms of `docs/bench_efficiency.py`) rather
-  than a single-arm table, with prose explaining why prove/verify show the
-  largest gap (modular-exponentiation-dominated) and commit/build/append/
-  replace a much smaller one.
-- Section~\ref{sec:leak-verify}'s Arm 1/Arm 2 description swapped to match
-  entry 48's actual test_leak.py swap (Arm 1 = shipped composite, fails;
-  Arm 2 = fresh prime, succeeds) — was still describing the pre-revert
-  arm assignment.
-- Status box, parameter table row, and conclusion's modulus-choice
-  sentence all updated to name the RSA-2048 composite as shipped rather
-  than a 256-bit prime.
-
-### Verified — 2026-08-12
-
-- `pdflatex`, three passes: 20 pages (grew by one from the earlier 19), no
-  undefined references, no errors.
-- Table/prose spot-checked via `pdftotext -layout` against the intended
-  wording rather than assumed correct from the `.tex` source alone.
-
-## 50. Truly-random H2 for `hm2`/`accS` — proposed, then aborted
+## 45. Truly-random H2 for `hm2`/`accS` — proposed, then aborted
 
 **Request** — "Please construct the hm2 in the `_rows_from_hash` that get
 accumulated to `accS.add(hm2)` using truly random values rather than
@@ -1894,9 +1765,9 @@ genuinely random (SystemRandom draw, independent of the item) would break:
   WRONG per-item counts from `cntS`, silently corrupting every other item
   sharing that batch.
 - The "incremental update == from-scratch rebuild" equivalence
-  (`tests/test_updatability.py`'s stage-1 check, backing the paper's
-  bit-identical-update theorem) rebuilds a commitment from scratch under
-  the same pinned salts and expects an exact match. That only works today
+  (`tests/test_updatability.py`'s stage-1 check) rebuilds a commitment
+  from scratch under the same pinned salts and expects an exact match.
+  That only works today
   because H1 *and* H2 are both pure functions of the item plus the pinned
   salts — true H2 randomness breaks it unless a second pinning mechanism
   (mirroring `batch_salts`) is added for H2 draws specifically.
@@ -1918,7 +1789,7 @@ narrower (edge-digits-only) scope.
 
 # Part G — a real domain hash (SHAKE128), replacing the digit-substitution `hash()` for item digests
 
-## 51. `Utils.domain_hash` (SHAKE128) replaces `hash()` for H1/H2; comment cleanup
+## 46. `Utils.domain_hash` (SHAKE128) replaces `hash()` for H1/H2; comment cleanup
 
 **Request** — "what about shake_128?" (following a design discussion on
 whether a true cryptographic hash could feed the accumulator grid), then
@@ -1931,9 +1802,8 @@ a cryptographic hash: it substitutes each decimal digit of `val` with a
 fixed public weight (`P[d] = vsum_level(k, values=nums[d])` over a
 10-element lookup) and reassembles positionally. No avalanche effect
 (changing digit `e` of `val` only touches term `e` of the sum), no
-preimage/collision-resistance argument — which is exactly why the eprint's
-`Open Problem~\ref{op:hash}` flagged domain-hash collision resistance as
-an unproven assumption rather than a proven one.
+preimage/collision-resistance argument — domain-hash collision resistance
+was an unproven assumption rather than a proven one.
 
 - New `Utils.domain_hash(data)` in both `ms6/utils6.py` and
   `vs6/utils6.py`: SHAKE128 digest of `data` (bytes), zero-padded to a
@@ -2001,46 +1871,43 @@ transform) and speed.
 
 - `python3 -m tests`, three consecutive runs: all green.
 - Committed on a new `ms6-shake128` branch (off `rand-edge`, on top of
-  entry 48's revert), verified green again on the exact committed tree.
+  entry 44's revert), verified green again on the exact committed tree.
   Push to GitHub not possible from this sandbox (no credentials) — same
   environment limitation noted in entries 19/20; push manually.
 
 # Part H — salting the domain hash: closing the offline-guessing gap
 
-## 52. Weaker-assumptions review, then `h1_salt`: a per-batch secret salt mixed into H1
+## 47. Weaker-assumptions review, then `h1_salt`: a per-batch secret salt mixed into H1
 
 **Request** — "What are the other weaker assumptions in the ms6 that
 makes it less zero knowledge?", then "Yes, sketch what closing the
 biggest gap (the unsalted domain hash) would take and benchmark it."
 
-With entry 51's `domain_hash` giving H1/H2 real collision resistance, the
+With entry 46's `domain_hash` giving H1/H2 real collision resistance, the
 next question was what's still weakening confidentiality beyond the
-already-documented singleton-bucket exposure (entries covering
-`sec:leak`/`sec:decoy`). Five gaps were surfaced, ranked:
+already-documented singleton-bucket exposure. Five gaps were surfaced,
+ranked:
 
 1. **Unsalted domain hash (the one closed here).** `H1 =
    domain_hash(H1_TAG:val)` is a pure public function of `val` alone —
    anyone can hash a guessed value offline and compare, with zero
-   interaction with the prover. Combined with `Observation obs:ratio`
-   (querying the same commitment with two claim sets differing by one
-   item cancels the blinding grid `S(r,j)` and recovers
+   interaction with the prover. Combined with the ratio-cancellation
+   observation (querying the same commitment with two claim sets
+   differing by one item cancels the blinding grid `S(r,j)` and recovers
    `Edge(H1(i0), r, j, tau_H)` for the unclaimed item), this makes
    dictionary attacks over low-entropy item spaces — SSNs, names, the
-   paper's own sanctions-screening use case — practical without ever
-   touching the prover.
+   sanctions-screening use case — practical without ever touching the
+   prover.
 2. Structural exposure at edge columns is neutralized, not eliminated
-   (`Proposition prop:leak`/`Corollary cor:cascade` — still true, decoy
-   padding just makes what's exposed inert).
+   (still true, decoy padding just makes what's exposed inert).
 3. Multi-query security is unaddressed — `S` is fixed across every
    opening of the same commitment, so it cancels in the ratio trick
    regardless of how strong the blinding is.
-4. No formal hiding definition or proof exists yet (`Open Problem
-   op:hiding`).
-5. Binding itself isn't formally reduced either (`op:binding`,
-   `op:hash`).
+4. No formal hiding definition or proof exists yet.
+5. Binding itself isn't formally reduced either.
 
 Gap 1 was chosen to close because, unlike true per-item randomness (the
-`hm2` idea aborted in entry 50), a per-*batch* secret that's
+`hm2` idea aborted in entry 45), a per-*batch* secret that's
 deterministic given the batch salt doesn't break `Commitment.replace()`/
 `delete()` or the incremental-vs-from-scratch rebuild-equivalence
 theorem — it can piggyback on the `batch_salts=` pinning mechanism `S0`
@@ -2095,11 +1962,11 @@ does, since both are per-batch secrets revealed at opening time:
 ### Measured — 2026-08-12
 
 Isolated: `_h1_salt` costs ~0.58us per call and runs once per **batch**,
-not per item — at `batch_size=1000` (the paper's default), that's fully
-amortized to a rounding error.
+not per item — at `batch_size=1000` (the default), that's fully amortized
+to a rounding error.
 
 `docs/bench_efficiency.py`, same 120,000-item registry, same two-arm
-(2048-bit / 256-bit) comparison as entry 51, before vs. after salting:
+(2048-bit / 256-bit) comparison as entry 46, before vs. after salting:
 
 | op | before (unsalted) | after (salted) |
 |---|---|---|
@@ -2118,11 +1985,10 @@ gap, as expected given the per-batch (not per-item) amortization.
 - `python3 -m tests`, three consecutive runs: all green, including the
   adversarial forgery suite and the leak/decoy numerical checks with the
   salt threaded through their fabricated-value fixtures.
-- Not yet committed to the paper (no update to `sec:hash`/`op:hiding`
-  made for this specific change) — implementation and benchmark only, on
-  a new `salted-domain-hash` branch off `ms6-shake128`.
+- Implementation and benchmark on a new `salted-domain-hash` branch off
+  `ms6-shake128`.
 
-## 53. `QueryGovernor`: a deployment-level policy layer for the multi-query correlation risk
+## 48. `QueryGovernor`: a deployment-level policy layer for the multi-query correlation risk
 
 **Request** — "What are the other weaker assumptions..." surfaced gap 3
 in that discussion: "`S` is fixed across every opening of the same
@@ -2131,7 +1997,7 @@ blinding is." Follow-up: "how to address the Multi-query security gap as
 `S` is fixed across openings of the same commitment?", then "Implement
 the option 1 for the deployment-level query governance."
 
-Unlike entry 52's `h1_salt` (a pure standalone function call, free to
+Unlike entry 47's `h1_salt` (a pure standalone function call, free to
 change), `S` cannot be fixed the same way: tracing the actual math showed
 `H'(r,j) = H(r,j) * S(r,j)^d` is what gets row-sealed into `h_row`, then
 `h_batch`, then `c` itself (`_seal_grid`) — `S` is baked into the
@@ -2149,10 +2015,10 @@ claim-set pairs that are suspiciously close to ones already served; (2)
 scheduled batch-salt rotation, reusing existing `Commitment(...,
 batch_salts=...)` reseal machinery; (3) true per-query rerandomization —
 research-scope, risks weakening binding if done carelessly. Option 1 was
-chosen: cheapest, closes the concrete attack shape the eprint's
-Observation `obs:ratio` describes, and needed no changes to `ms6()`/
+chosen: cheapest, closes the concrete attack shape the `obs:ratio`
+observation describes, and needed no changes to `ms6()`/
 `ps6()`/`vs6()`'s existing signatures (an intentionally additive-only
-change, unlike entry 52's breaking one).
+change, unlike entry 47's breaking one).
 
 **What was built** (`ms6/core.py`, right after `_get_batch_ids`):
 - `QueryPolicyViolation(Exception)` — raised on refusal.
@@ -2195,13 +2061,12 @@ itself already demonstrated (`tests/test_query_governance.py`'s
 "disjoint single-item swap... NOT blocked by default" check). Fixed to
 correctly describe both true difference-1 directions (add one, drop one)
 and call out the swap case as difference-2 explicitly. Separately,
-`_h1_salt`'s docstring (entry 52) referenced "Remark on multi-query
-exposure in the eprint" — no remark by that title exists; retitled to
-the actual section (Observation `obs:ratio` / "What an observer can
-still compute") and added a forward-pointer to `QueryGovernor` as this
-codebase's mitigation for the sibling S-cancellation risk. No other
-stale comments found across `ms6/*.py`, `vs6/*.py`, `tests/*.py`,
-`examples/*.py`.
+`_h1_salt`'s docstring (entry 47) referenced a remark by a title that no
+longer matched anything; retitled to reference `obs:ratio` ("What an
+observer can still compute") and added a forward-pointer to
+`QueryGovernor` as this codebase's mitigation for the sibling
+S-cancellation risk. No other stale comments found across `ms6/*.py`,
+`vs6/*.py`, `tests/*.py`, `examples/*.py`.
 
 ### Verified — 2026-08-12
 
@@ -2213,16 +2078,15 @@ stale comments found across `ms6/*.py`, `vs6/*.py`, `tests/*.py`,
   one touched batch blocks a whole multi-batch request with zero partial
   state recorded elsewhere; independent claims on separate batches both
   succeed; the logger callback fires on refusal; and an end-to-end run
-  against a real `Commitment` via `ps6_governed` blocks the paper's exact
-  construction while still serving a legitimately different follow-up
-  claim.
+  against a real `Commitment` via `ps6_governed` blocks the `obs:ratio`
+  construction exactly while still serving a legitimately different
+  follow-up claim.
 - `python3 -m tests`, three consecutive runs: all green (73 checks, 0
   failures), including after the docstring fixes above.
-- Not yet committed to the paper — implementation, tests, and the
-  comment-cleanup pass only, on a new `multi-query-governance` branch off
-  `salted-domain-hash`.
+- Implementation, tests, and the comment-cleanup pass on a new
+  `multi-query-governance` branch off `salted-domain-hash`.
 
-## 54. `vsum_parts`: investigated, reverted, and DEFAULT_MOD moved to a 256-bit prime
+## 49. `vsum_parts`: investigated, reverted, and DEFAULT_MOD moved to a 256-bit prime
 
 **Request** — "wire vsum_parts correctly to the eval_level_mod, and to the
 mul_combinations_mod." `vsum_parts`/`vsum` (in `ms6/utils6.py`, and a
@@ -2248,11 +2112,10 @@ incompatibility, not a wiring slip.
 Asked what `vsum_parts` was actually meant to accomplish (three options:
 compress proof size / revert / something else). Answer: "make root
 extraction hard so we use 256 bit prime DEFAULT_MOD" — the real goal was
-obscuring the exposed singleton/near-singleton buckets (`Proposition
-prop:leak`/`Corollary cor:cascade` in the eprint) enough that a cheap
-known-order prime could replace the expensive 2048-bit RSA composite as
-`DEFAULT_MOD`, without reopening the leak the composite's unknown order
-currently guards against as a second layer.
+obscuring the exposed singleton/near-singleton buckets enough that a
+cheap known-order prime could replace the expensive 2048-bit RSA
+composite as `DEFAULT_MOD`, without reopening the leak the composite's
+unknown order currently guards against as a second layer.
 
 **Why that specific goal can't be reached by transforming what's
 published.** The legitimate verifier never extracts anything from a
@@ -2285,10 +2148,10 @@ were reverted to the tested `main` behavior (git diff empty after; `python3
 order was never load-bearing for the singleton-bucket leak (the edge-
 column decoy padding neutralizes it regardless of modulus) — the composite
 was kept only as an optional, redundant second layer, at a measured
-~2-3x modular-exponentiation cost over a 256-bit modulus (the eprint's own
-efficiency-section benchmark). So "use a cheap prime safely" was already
-true today, without touching `vsum_parts` at all. Confirmed with the user,
-then implemented directly:
+~2-3x modular-exponentiation cost over a 256-bit modulus (this project's
+own efficiency benchmark, entry 44). So "use a cheap prime safely" was
+already true today, without touching `vsum_parts` at all. Confirmed with
+the user, then implemented directly:
 
 - `DEFAULT_MOD` in both `ms6/utils6.py` and `vs6/utils6.py` changed from
   the RSA-2048 Factoring Challenge composite to a 256-bit nothing-up-my-
@@ -2342,10 +2205,9 @@ inaccuracies, both fixed:
   count.
 - A claimed "8x arithmetic cost" for `LEGACY_MOD_2048` vs. the new default
   (in `utils6.py`'s comments and `README.md`) was an unmeasured guess that
-  contradicted this project's own actual benchmark
-  (`docs/ms6_eprint.tex`'s efficiency section measures ~2-3x for the
-  exponentiation-dominated operations). Corrected all three locations to
-  cite the real, measured figure instead.
+  contradicted this project's own actual benchmark (entry 44 measures
+  ~2-3x for the exponentiation-dominated operations). Corrected all three
+  locations to cite the real, measured figure instead.
 - `docs/bench_efficiency.py` (gitignored, so untracked, but still live
   code) hardcoded `mod_2048 = core.DEFAULT_MOD` to build its "2048-bit"
   comparison arm — now silently comparing a 256-bit prime against itself
@@ -2366,12 +2228,9 @@ changes, but re-verified rather than assumed): all green, 78/78.
 
 Committed to `main` (comment cleanup folded into the same commit as the
 `DEFAULT_MOD` switch — no code-behavior changes in this entry, only the
-constant, its test coverage, and documentation). Not reflected in
-`docs/ms6_eprint.tex` (`Remark rem:mod-choice` and the efficiency
-section's 2048-vs-256 discussion still describe the old default) —
-pending explicit go-ahead, same as this session's established pattern.
+constant, its test coverage, and documentation).
 
-## 55. Dead-parameter and dead-variable cleanup
+## 50. Dead-parameter and dead-variable cleanup
 
 **Request** — "cleanup unused variables and make the method signatures
 clean, for example DEFAULT_S_EXP is not in use."
@@ -2457,14 +2316,14 @@ noqa: F401` re-export pattern, not new).
 Not yet committed — cleanup only, pending confirmation before touching
 git.
 
-## 56. Edge columns made unconditional: `hm1` -> fixed PAD, `hm2` -> deterministic slot-derived digits
+## 51. Edge columns made unconditional: `hm1` -> fixed PAD, `hm2` -> deterministic slot-derived digits
 
-Follow-on to entry 45's decoy padding, after a truly-random detour (proposed
+Follow-on to entry 41's decoy padding, after a truly-random detour (proposed
 in a design discussion, prototyped as a `SystemRandom` draw for `hm2`, then
-reverted) that reran the same rebuild-equivalence analysis as entry 50 and
+reverted) that reran the same rebuild-equivalence analysis as entry 45 and
 landed somewhere different this time.
 
-Entry 45's decoys were item-derived (`_edge_digits`, a hash of the item's
+Entry 41's decoys were item-derived (`_edge_digits`, a hash of the item's
 own row content) — uncorrelated-looking, but not provably empty of
 information, and its own docstring only ever claimed "provably decoy," not
 "provably constant." Reworked both sides:
@@ -2474,13 +2333,12 @@ information, and its own docstring only ever claimed "provably decoy," not
   chunk, contributing no prime to `cell_product_mod`. `vs6.interlace_mod`
   reproduces this exactly, so `row[j] == 1` at every edge column for ANY
   claimed item set, unconditionally — not a bounded leak, no information
-  at all. This is what `docs/ms6_eprint.tex`'s new `Theorem thm:edgeconst`
-  formalizes (replacing the old `Theorem thm:decoy`, which only bounded a
-  guessing advantage).
+  at all (a strictly stronger guarantee than the earlier bounded-guessing-
+  advantage argument).
 - `hm2` (S/accS side, `_attach_edges_s`/`_edge_digits_s`): edge columns are
   SHAKE-256 of `(S_EDGE_TAG, h1_salt, slot_index, row_index)` — deterministic
   and recomputable by the prover from data it already holds, but NOT a
-  function of the item's own hash/value the way entry 45's decoys were.
+  function of the item's own hash/value the way entry 41's decoys were.
   Not load-bearing for the ratio-is-always-1 property (that comes from
   `hm1` alone — S cancels in any cross-proof ratio regardless of its own
   content), but keeps S(edge) free of item content even in the
@@ -2490,7 +2348,7 @@ The two sides get different treatment on purpose: `hm1` needs bit-for-bit
 public reproducibility (the verifier reconstructs it independently), `hm2`
 only needs prover-side recomputability without extra storage. A genuinely
 random `hm2` (no seed at all) was tried first and reverted — same
-rebuild-equivalence problem as entry 50: `Commitment`'s bit-identical
+rebuild-equivalence problem as entry 45: `Commitment`'s bit-identical
 incremental-vs-from-scratch rebuild property needs every derived value to
 be a pure function of pinned salts, and true randomness bought no
 additional binding or hiding once `hm1`'s fix alone already closed the
@@ -2503,11 +2361,11 @@ the two `examples/*.py` demos) cross-reference instead of duplicating.
 
 ### Verified
 
-`tests/test_leak.py` extended (this session, see entry 58's test note) to
+`tests/test_leak.py` extended (this session, see entry 53's test note) to
 check `row[j] == 1` and cross-proof invariance across every edge column,
 not just column 0, on all three modulus arms. Full suite green.
 
-## 57. `op:multiquery` dummy-item probe — verification only, no code change
+## 52. `op:multiquery` dummy-item probe — verification only, no code change
 
 **Request** — "Before the `_seal_rows` swap verify and confirm adding a
 dummy item to the `accH`/`H`/`hm1` in each new batch solves the
@@ -2533,16 +2391,15 @@ confirmed `min_new_items=3` blocks both, while `min_new_items=2` would let
 the second shape through. Removing the check entirely would leave both
 shapes unmitigated. No code touched for this entry.
 
-## 58. `_seal_rows` swap: `Utils.domain_hash` replaces `hash()` in the batch-combining fold
+## 53. `_seal_rows` swap: `Utils.domain_hash` replaces `hash()` in the batch-combining fold
 
-**Request** — "Make the `_seal_rows` swap and also remove the
-`docs/ms6_eprint.tex` reference from the readme file as docs folder is
-present in the gitignore."
+**Request** — "Make the `_seal_rows` swap and also remove the stale
+design-doc reference from the readme file as docs folder is present in
+the gitignore."
 
-The batch-combining fold (`_seal_rows`/`_seal_batch`/`_SealTree`, entries
-16-19/45) still used the old digit-substitution `Utils.hash()` for its
-per-batch `h` scalar, even after entry 51 moved H1/H2 to SHAKE128
-`domain_hash`. Worth closing for the same reason entry 51 mattered: `vs6()`
+The batch-combining fold (`_seal_rows`/`_seal_batch`/`_SealTree`, entries 16-19/41) still used the old digit-substitution `Utils.hash()` for its
+per-batch `h` scalar, even after entry 46 moved H1/H2 to SHAKE128
+`domain_hash`. Worth closing for the same reason entry 46 mattered: `vs6()`
 takes an untouched batch's own folded scalar (`h_list[b] = ps_list[b]`) on
 trust and only independently recomputes the FOLD (`_seal_batch`, asserting
 `h == c`) — it never re-derives an untouched batch from row-level data. So
@@ -2559,52 +2416,17 @@ variable-length decimal output; `domain_hash`'s output width is fixed
 mis-chunked it. Added `_seal_fold_rows(chunk_size) =
 -(-u.DOMAIN_HASH_DIGITS // chunk_size)` and used it at that call site.
 
-Also removed three `docs/ms6_eprint.tex` references from `README.md` (the
+Also removed three stale design-doc references from `README.md` (the
 `docs/` folder is gitignored, so those links pointed at a file readers of
 the pushed repo wouldn't have) and fixed two nearby descriptions
 (`hash()` usage, edge-column hiding) that had gone stale relative to
-entries 51 and 56.
+entries 46 and 51.
 
 ### Verified
 
 Full suite green after the swap.
 
-## 59. `docs/ms6_eprint.tex` rewritten to match the current design; compiled to PDF
-
-**Request** — "Please rewrite the paper and convert it to a pdf document
-for review."
-
-The eprint had drifted from the shipped code across several redesigns
-(entries 45, 51, 56, 58) without ever getting a comprehensive pass — prior
-entries (39, 47, 49) each updated it incrementally around one change.
-Rewrote: status box, abstract, intro, construction section; a new §7
-subsection on the batch-combining fold's binding relevance (entry 58's
-rationale, formalized); a full rewrite of §8 replacing the old
-decoy/`Edge()`-based mechanism with the new unconditional PAD-based one —
-`Theorem thm:edgeconst` (replacing `thm:decoy`) proves `row[edge] == 1` for
-ANY item set, and `Corollary cor:edgehide` replaces the old bounded-hiding
-theorem with a trivial zero-advantage statement, since there's no longer
-anything to bound; `Observation obs:ratio` rescoped from "recovers an
-edge-column decoy value" to "recovers real digit content at INTERIOR
-columns" (edge columns now yield ratio 1 trivially); rewrote the
-query-governance section and the leak-verification section to match the
-actual three-armed test (`tests/test_leak.py`); flipped the efficiency
-table's default-modulus framing (`DEFAULT_MOD` is the 256-bit prime, entry
-54); removed Open Problems `op:leak2`/`op:hiding` (now closed, not open),
-updated `op:binding`/`op:hash`/`op:multiquery`; rewrote the conclusion.
-
-Extended `tests/test_leak.py` to check ALL edge columns, not just column 0
-(matching entry 56's "unconditional at every edge column, not just the
-singleton bucket" claim with an actual check of that scope). Compiled
-cleanly via `pdflatex` (3 passes, zero errors, zero undefined references) —
-26 pages.
-
-### Verified
-
-Full suite green, including the widened `test_leak.py`. PDF presented to
-the user for review.
-
-## 60. `vsum_level_fold_mod` call sites missing `global_keys=True` — a real, dormant correctness bug
+## 54. `vsum_level_fold_mod` call sites missing `global_keys=True` — a real, dormant correctness bug
 
 **Request** — first, a claim the function itself was broken ("set the
 chunk_size in the vsum_level_fold_mod to less than the DEFAULT_CHUNK_SIZE,
@@ -2648,7 +2470,7 @@ scratch.
 
 `python3 -m tests`, three consecutive full runs: all green.
 
-## 61. Merge to `main`, push, and merged-branch cleanup — partially blocked by sandbox credentials
+## 55. Merge to `main`, push, and merged-branch cleanup — partially blocked by sandbox credentials
 
 **Request** — "please commit the changes to the main branch," and later
 "merge and commit the pending changes to the main branch, also push it to
@@ -2660,7 +2482,7 @@ Before the first commit, `git status` showed an unexplained diff in
 `chunk_size` default change) that didn't correspond to anything just
 discussed. Asked rather than guessed; told to exclude it. Committed the
 remaining 5 files as `2f97ed6` ("Neutralize edge columns unconditionally;
-harden the seal-tree fold" — entries 56/58/59). After entry 60's fix,
+harden the seal-tree fold" — entries 51/53). After entry 54's fix,
 committed the 4 remaining files as `bf28c46` ("Fix vsum_level_fold_mod call
 sites missing global_keys=True").
 
@@ -2686,14 +2508,14 @@ where the destination mattered: moving locks INTO `refs/heads/` breaks
 things, moving them OUT of it doesn't. `git fsck` afterward showed only
 benign dangling commits; `git fetch origin --prune` ran clean.
 
-## 62. Stale-comment sweep across the whole tree
+## 56. Stale-comment sweep across the whole tree
 
 **Request** — "Cleanup comments and remove any staled comments then copy
 the chat history to the ms6_vibe.md file."
 
 Targeted greps for known problem patterns left behind by this session's
-redesigns (entries 56/58/60): old section header `EDGE-COLUMN DECOY
-PADDING` -> `EDGE-COLUMN PADDING` (entry 56 dropped "DECOY" from the
+redesigns (entries 51/53/54): old section header `EDGE-COLUMN DECOY
+PADDING` -> `EDGE-COLUMN PADDING` (entry 51 dropped "DECOY" from the
 mechanism's name); "provably decoy"/"decoy either way" -> "a fixed public
 constant" (`ms6/utils6.py`, `vs6/utils6.py`, `tests/test_modulus.py`, both
 `examples/*.py` demos); a leftover "which columns are decoy on the next
@@ -2716,9 +2538,9 @@ zero information") and were left alone.
 session's established practice is to re-run rather than assume).
 
 Not yet committed — pending confirmation before touching git, same pattern
-as entry 55.
+as entry 50.
 
-## 63. Comparative research: op:multiquery in other vector commitment schemes, and whether value-only transforms can fix it
+## 57. Comparative research: op:multiquery in other vector commitment schemes, and whether value-only transforms can fix it
 
 **Request** — "Any other vector commitment scheme had similar issues
 related to op:multiquery and how they resolved it," then "can we apply any
@@ -2747,7 +2569,7 @@ confirming the same ratio still cancels. Also flagged, independent of the
 encoding question, that a 10-digit message space is brute-forceable
 regardless of one-wayness.
 
-## 64. Alternatives to modular root-extraction hardening (research only)
+## 58. Alternatives to modular root-extraction hardening (research only)
 
 **Request** — "what are alternatives to the modular reduction that will
 prevent the root extraction?"
@@ -2762,7 +2584,7 @@ issues), and this codebase's edge-column padding already closes the
 specific leak being discussed for free, at the data level, regardless of
 which of these the modulus were swapped for.
 
-## 65. Externally-modified working tree, twice: six protocol bugs found and reverted to HEAD, then the same `eval_level_mod` swap re-diagnosed from scratch
+## 59. Externally-modified working tree, twice: six protocol bugs found and reverted to HEAD, then the same `eval_level_mod` swap re-diagnosed from scratch
 
 **Request** — "Please run all tests for the protocol level changes to the
 ms6 project and fix," then, after the crash reappeared following an
@@ -2812,14 +2634,14 @@ result into the multinomial expansion of `(sum)^d` rather than `h_d`.
 stable checkpoint, explicit mismatch (`assert h==c` failing) reported
 verbatim at each broken one rather than papered over.
 
-## 66. The multinomial weighting turns out to be intentional: inlined into `eval_level_mod2`, and the full externally-modified construction verified self-consistent
+## 60. The multinomial weighting turns out to be intentional: inlined into `eval_level_mod2`, and the full externally-modified construction verified self-consistent
 
 **Request** — "eval_level_mod2 is same eval_level_mod but multiplying each
 term with a multinomial coefficient from the multinomial(P, deg) so
 instead of using deep_prod can we multiply the multinomial coefficients in
 the eval_level_mod2."
 
-This reframed entry 65's "bug" as intentional: the multinomial weighting
+This reframed entry 59's "bug" as intentional: the multinomial weighting
 was meant to be there, just applied more directly than the
 `identity()`+`deep_prod()` two-pass approach could manage correctly.
 Inlined it: `ce = self.multinomial([c for p, c in runs], N) % mod`
@@ -2831,13 +2653,13 @@ version on multi-partition-shape buckets and traced why: `identity()`'s
 buckets are ordered by partition-shape DP, not by the natural combo order
 `eval_level_mod2`'s own loop produces, so the old version was pairing the
 wrong coefficient against the wrong term for any bucket spanning more than
-one partition shape — a second, independent bug beyond entry 65's
+one partition shape — a second, independent bug beyond entry 59's
 "wrong quantity" diagnosis. The inline version sidesteps this by
 construction (each combo computes and applies its own `ce` in the same
 loop iteration, no separate ordering to line up).
 
 Ran the real suite expecting a weighted-prover/unweighted-verifier
-mismatch per entry 65's own analysis — got 87/87 instead. Investigating
+mismatch per entry 59's own analysis — got 87/87 instead. Investigating
 why turned up that `_seal_grid`'s row-fold (`pow(vsum_level(1,
 values=H1),d,mod)`, i.e. `(sum)^d`) and its batch-level return
 (`vsum_level_fold_mod`, `h_d`-style), plus `vs6/core.py`'s `_vs6_batch`
@@ -2853,7 +2675,7 @@ stable across 3 consecutive full runs before reporting it, since the
 result was surprising enough to warrant re-verification rather than
 trusting one green run.
 
-A more careful follow-up derivation (entry 68, prompted by the next
+A more careful follow-up derivation (entry 62, prompted by the next
 request) later corrected the specific identity claimed here: `vsum_level`
 with keys defaulted from `range(len(values))` builds a base-10
 *positional* encoding (`sum_k values[k] * 10**(C-k)`), not a plain sum —
@@ -2868,7 +2690,7 @@ error was caught.
 `python3 -m tests`, 3 consecutive full runs, 87/87 each time, including
 every adversarial/soundness/leak check.
 
-## 67. Dead-code removal (round 2), a real parallel-path bug found while re-deriving the row identity, and a binding check before touching op:multiquery
+## 61. Dead-code removal (round 2), a real parallel-path bug found while re-deriving the row identity, and a binding check before touching op:multiquery
 
 **Request** — "yes, please remove the dead code and also verify and
 confirm the binding hold true then we will work the fix for the
@@ -2878,16 +2700,16 @@ Removed `identity`, `p_set`, `partition_counts`, `deep_prod`, `poly_pow`,
 `poly_pow_fast`, `_check_mod`, `_miller_usable`, and an unused new
 `vsum_level_mod` (Horner-fold) from both `ms6/utils6.py` and
 `vs6/utils6.py` — all confirmed, by grep across the whole tree (not just
-the live pipeline), to have zero remaining callers once entry 66's inline
+the live pipeline), to have zero remaining callers once entry 60's inline
 refactor stopped needing `identity()`/`deep_prod()`. Kept `multinomial`,
 which the inline refactor does call. Left the original (now-superseded)
 `eval_level_mod` function itself in place at this point, deliberately —
 flagged as a judgment call rather than deleted unilaterally, since it's
 cross-referenced from docstrings/comments throughout the tree as the
-canonical algorithm description (resolved properly in entry 70).
+canonical algorithm description (resolved properly in entry 64).
 
 While re-deriving the exact row-level identity from scratch (to answer
-the binding question rigorously rather than re-assert entry 66's
+the binding question rigorously rather than re-assert entry 60's
 narrative), found that `ms6/utils6.py`'s `seal_row_mod` — the
 `workers>1` row-fold branch inside `_seal_grid`, exercised only when a
 single batch spans more than one row AND `workers>1` reaches `_seal_grid`
@@ -2908,7 +2730,7 @@ For the binding check itself: a probe against the live functions (not
 hand-derivation) showed the row-level identity that actually holds is
 `committer_h = pow(vsum_level(1, values=full_row), d, mod)`, where
 `vsum_level(1, ...)` is a base-10 *positional* encoding of the row
-(`sum_k full_row[k] * 10**(C-k)`), not the plain sum entry 66 had stated —
+(`sum_k full_row[k] * 10**(C-k)`), not the plain sum entry 60 had stated —
 verified this precisely by splitting a random row into oset/claimed
 contributions and confirming the verifier's `eval_level_mod2` +
 `mul_combinations_mod` pairing reconstructs the committer's value exactly,
@@ -2931,7 +2753,7 @@ pyflakes/vulture clean on the touched files. `python3 -m tests`: 90/90
 re-run of the `seal_row_mod` fix to confirm the new regression test
 actually catches the bug it's named for.
 
-## 68. `eval_level_mod2` renamed to `eval_level_mod` (old version deleted); `SEAL_TAG` domain-hashing moved out of `_seal_rows` and into `_seal_grid`/`_vs6_batch`/`_seal_hash`
+## 62. `eval_level_mod2` renamed to `eval_level_mod` (old version deleted); `SEAL_TAG` domain-hashing moved out of `_seal_rows` and into `_seal_grid`/`_vs6_batch`/`_seal_hash`
 
 **Request** — "rename eval_level_mod2 to eval_level_mod and remove the
 dead eval_level_mod. Hash the h_list using the domain hash in the
@@ -2998,29 +2820,29 @@ pyflakes/vulture clean. `python3 -m tests`, 2 consecutive full runs:
 90/90, including `copy parity` (ms6.py <-> vs6.py output comparison) and
 `stage 4 cache` (`_SealTree` vs. `_seal_batch` equality at every level).
 
-## 69. Stale-comment sweep, entries 63-68
+## 63. Stale-comment sweep, entries 57-62
 
 **Request** — "Cleanup the comments and remove any staled comments then
 copy the chat session into the ms6_vibe.md file."
 
 Targeted grep for commented-out code left over from this session's several
 rounds of external/manual edits (`^\s*#\s*return`, `^\s*#\s*H = `, etc.)
-across every file touched in entries 63-68. Found one real hit:
+across every file touched in entries 57-62. Found one real hit:
 `ms6/utils6.py`'s `seal_row_mod` still had a dead `# return
 int(self.vsum_level_fold_mod(...))` line from an earlier abandoned version,
 and its docstring still described that abandoned `vsum_level_fold_mod`-
 based approach rather than the `pow(vsum_level(1, ...), N, mod)` construction
-entry 67 fixed it to actually use. Removed the dead line, rewrote the
-docstring to match the real implementation and cross-reference entry 67's
+entry 61 fixed it to actually use. Removed the dead line, rewrote the
+docstring to match the real implementation and cross-reference entry 61's
 regression test. Grepped separately for `eval_level_mod2` and for
 `_seal_rows`/hash-related stale wording across `docs/`/`README*`: none
-found, entry 68's docstring updates already covered every live reference.
+found, entry 62's docstring updates already covered every live reference.
 
 ### Verified
 
 `python3 -m tests`: 90/90 after the comment fix.
 
-## 70. q_chunk_size pseudocode: tested, and the op:multiquery question answered
+## 64. q_chunk_size pseudocode: tested, and the op:multiquery question answered
 
 **Request** — "Added a query chunk size q_chunk_size in the eval_level_mode
 to use different folding based on different iset size. Please test the
@@ -3080,7 +2902,7 @@ computed target) and the real `ps6`/`vs6` pipeline through
 wired into the live files; all `# TEST FIX` markers were reverted after
 each round, confirmed via `grep -rn "TEST FIX"` returning empty.
 
-## 71. Two-level nested fold: correct, but doesn't close the query-time gap either
+## 65. Two-level nested fold: correct, but doesn't close the query-time gap either
 
 **Request** — after this session derived, algebraically, why single-layer
 grouping can't work (any fold with `b=q_chunk_size` on both the inner
@@ -3108,7 +2930,7 @@ matched exactly across 8 configs (varying `L`, group size, `d`, `e`,
 including degenerate single-group and all-singleton-group edges). This is
 a genuinely different committed polynomial from the flat one, not a
 reconstruction of it, which is what makes it structurally different from
-every single-layer attempt in entry 70.
+every single-layer attempt in entry 64.
 
 Extending the probe against the actual ratio-cancellation attack (per
 `_h1_salt`'s own docstring, "Observation obs:ratio": two proofs differing
@@ -3138,7 +2960,7 @@ both demonstrated concretely (singleton-bucket ratio recovers
 column 0 leaks the same way once it's a group boundary). No changes from
 this entry were wired into the live files.
 
-## 72. q_chunk_size=0 crash, and the wiring bugs it had been masking
+## 66. q_chunk_size=0 crash, and the wiring bugs it had been masking
 
 **Request** — "Please fix the division by zero error," then "please run
 full test suites."
@@ -3161,7 +2983,7 @@ len(...)`).
 
 `python3 -m tests`, 3 consecutive runs: 89/89, no flakiness.
 
-## 73. %3 and rechunk: also fail, with a general proof of why
+## 67. %3 and rechunk: also fail, with a general proof of why
 
 **Request** — concurrent, unprompted edits appeared in the working tree
 mid-session (per this session's established pattern of the user directly
@@ -3199,12 +3021,12 @@ completeness only through the bilinear pairing `sum_j(X_j*Y_j)`; grouping
 grouped values are multiplied together (concretely: grouping `[X0,X1]` and
 `[Y0,Y1]` into `X0+X1*10` and `Y0+Y1*10` and multiplying gives an
 `X0*Y1+X1*Y0` term the flat, ungrouped target never has). This subsumes
-every grouping attempt across entries 70-73 (`backward_chunk`+`vsum_level`
+every grouping attempt across entries 64-67 (`backward_chunk`+`vsum_level`
 at various bases, concatenation, `rechunk`) under one structural cause,
 and confirms `q_chunk_size` must be 1 as long as `_seal_grid`'s row
 identity itself stays flat — real per-query grouping is not a
 prove/verify-side formula to find, it requires `_seal_grid` to become a
-genuinely nested construction (entry 71), which itself doesn't close
+genuinely nested construction (entry 65), which itself doesn't close
 op:multiquery either.
 
 Reverted `eval_level_mod`/`mul_combinations_mod` to the proven
@@ -3218,7 +3040,7 @@ Cross-term argument confirmed with a direct numeric example. `rechunk`'s
 digit-width threshold confirmed at production scale (256-bit modulus).
 `python3 -m tests`, 3 consecutive runs after the revert: 89/89.
 
-## 74. Per-query grouping removed; eval_level_mod/mul_combinations_mod deduplicated
+## 68. Per-query grouping removed; eval_level_mod/mul_combinations_mod deduplicated
 
 **Request** — "I have removed the per query inner folding and also cleaned
 up the redundant code. Please fix the bug with test_parity and re-run the
@@ -3254,8 +3076,7 @@ Fixed both: `hash` calls now pass `mod_`; `ps_` is now built by calling
 `mul_combinations_mod` will look for.
 
 Comment sweep: rewrote the `eval_level_mod`/`mul_combinations_mod`
-docstrings in both `ms6/utils6.py` and `vs6/utils6.py` (stale since entry
-73's revert, still describing "q_chunk_size is forced to 1" when the
+docstrings in both `ms6/utils6.py` and `vs6/utils6.py` (stale since entry 67's revert, still describing "q_chunk_size is forced to 1" when the
 parameter no longer exists at all) to describe the current `coef`-flag
 design and keep only the cross-term impossibility argument as historical
 context; fixed a stray `ßßß` typo injected into one of them; removed
@@ -3270,7 +3091,7 @@ trailing newline to `vs6/utils6.py`.
 `python3 -m tests`, 3 consecutive runs: 89/89, no flakiness, before and
 after the comment cleanup.
 
-## 75. Root-extraction on the `(sum)^d` row fold; reverted to the `h_d` construction
+## 69. Root-extraction on the `(sum)^d` row fold; reverted to the `h_d` construction
 
 **Request** — "Please check if there any security (hiding/binding) concern
 with the new protocol as we are now doing `pow(ut.vsum_level(H1), d, mod)`
@@ -3307,7 +3128,7 @@ as `pow(single_scalar, d, mod)` for any single scalar, so a `d`-th root
 extraction on it recovers nothing meaningful, and single-column
 differences no longer isolate cleanly the way they did under `(sum)^d`.
 
-## 76. Swappable multi-level fold — design and validation (probes only, not yet wired)
+## 70. Swappable multi-level fold — design and validation (probes only, not yet wired)
 
 **Request** — "We will keep hunting for a fixed c solution" (declining an
 S-rotation redesign sketched in discussion, in favor of keeping `c` fixed
@@ -3363,11 +3184,11 @@ own `h_d`) and, at the later stages, against the real batch-level `c` a
 full `ms6()`/`ps6()`/`vs6()` round trip produces — not just internal
 self-consistency.
 
-## 77. Swappable multi-level fold wired into the real files
+## 71. Swappable multi-level fold wired into the real files
 
 **Request** — "Yes, wire this into the real files now."
 
-Wired entry 76's validated design into `ms6/utils6.py`, `vs6/utils6.py`,
+Wired entry 70's validated design into `ms6/utils6.py`, `vs6/utils6.py`,
 `ms6/core.py`, and `vs6/core.py`:
 
 - `mul_combinations_mod` gained a `b=1` parameter (default preserves every
@@ -3401,7 +3222,7 @@ Wired entry 76's validated design into `ms6/utils6.py`, `vs6/utils6.py`,
   ground-truth check that every menu entry reconstructs `_seal_grid`'s own
   row target.
 - Fixed a stale `eval_level_mod` docstring (still claiming `coef=True` was
-  the default — it's `False` since entry 75 — and still claiming "no
+  the default — it's `False` since entry 69 — and still claiming "no
   per-query grouping parameter here," now false) in both `utils6.py`
   copies.
 
@@ -3414,7 +3235,7 @@ probe: for a real `X`/`Y` pair, every `partition_menu` entry reconstructs
 disclosure shape matches the pre-existing `eval_level_mod(d, ...)` call
 exactly (`sweeps == [[old_style]]`).
 
-## 78. Sparse domain-hash expansion (bespoke `hash()` as append-only filler); `chunk_size` default raised to 100
+## 72. Sparse domain-hash expansion (bespoke `hash()` as append-only filler); `chunk_size` default raised to 100
 
 **Request** — "Use the bespoke hash to sparse the domain hashed values
 before it get encoded and goes into the accumulator so that way we can use
@@ -3429,7 +3250,7 @@ dead, fixed `u.PAD` columns — real content only fills 78% of the row.
 Added `sparse_expand(digest_str, target_len, mod, k=10)` to both
 `utils6.py` copies: extends a digest string out to `target_len` digits by
 APPENDING `hash()`-derived filler digits, never transforming
-`digest_str`'s own digits. This distinction matters: entry 51 (`ms6_vibe.
+`digest_str`'s own digits. This distinction matters: entry 46 (`ms6_vibe.
 md`) replaced this exact `hash()` function with `domain_hash` for H1/H2
 specifically because `hash()` "is a fixed, public digit-substitution
 transform with no collision-resistance argument behind it." Running the
@@ -3474,13 +3295,13 @@ rejection check, all correct.
 slower) -- tracks the combinatorial bucket count growth almost exactly
 (`x * C(chunk_size+d-1, d)`: `3 * C(42,3) = 34,440` at 40 vs
 `1 * C(102,3) = 171,700` at 100, a ~5x ratio). But a GROUPED partition
-(`row-major`, `q=10`, from entry 77's swappable fold) at `chunk_size=100`
+(`row-major`, `q=10`, from entry 71's swappable fold) at `chunk_size=100`
 proves in 6.6ms -- faster than the OLD `chunk_size=40` flat baseline, not
 slower. `chunk_size=100` only "makes proving harder" if the prover ignores
 the grouping option now available to it; using it, wider chunk_size and
 cheaper proving compose rather than trade off.
 
-## 79. Multi-level (recursive) partition folding
+## 73. Multi-level (recursive) partition folding
 
 **Request** — "Currently the grouping is two level folding so add
 multi-level folding."
@@ -3494,7 +3315,7 @@ composing affine maps stays affine at any depth -- splitting a leaf
 B*i*width`, `B' = B` unchanged); splitting it transposed-wise multiplies
 its stride (`A' = A + B*i`, `B' = B*q`). Either way the result is again a
 plain `(positions, A, B)` triple, so `eval_row_grouped`/`mul_group_hvec`/
-`mul_row_grouped` (entry 77) needed NO changes at all -- they already
+`mul_row_grouped` (entry 71) needed NO changes at all -- they already
 consumed flat leaf lists and have no notion of how many steps produced
 them.
 
@@ -3509,7 +3330,7 @@ from 15 single-level entries to 111 recipes, up to 3 levels deep
 width` left, so depth is bounded by `chunk_size`'s own factorization, no
 explicit cap needed) -- a materially richer disclosure-pattern space for
 the prover's per-row draw, strengthening the query-alignment defense in
-depth this feature exists for (entry 76's own honest characterization of
+depth this feature exists for (entry 70's own honest characterization of
 it still holds: probabilistic defense-in-depth, not a closure of
 `op:multiquery`'s root cause).
 
@@ -3537,170 +3358,12 @@ Noted for honesty: Cauchy-product convolution is associative, so a
 multi-level recipe with the same FINAL leaf width as some single-level
 choice costs about the same to prove/verify as that single-level choice
 would -- this entry's benefit is menu diversity (defense-in-depth), not
-additional raw speed beyond what entry 78's benchmark already showed for
+additional raw speed beyond what entry 72's benchmark already showed for
 grouping in general.
 
-## 80. `docs/metaseries/metaseries_foundation_spec.tex` rewritten: `h_d` given its own theorem, plus a new "group folding" section
+## 74. Higher-degree-$d$ folding investigated and rejected — a pseudocode file arrived, and turned out not to help
 
-Both `docs/ms6_eprint.tex` and `docs/metaseries/metaseries_foundation_spec.tex`
-were rejected by IACR ePrint with the same generic, non-technical boilerplate
-(clear/self-contained, look new and interesting, contain proofs). Rather than
-resubmit unchanged, went back to the foundation spec first, since entries
-75-79's own combination/folding machinery is "simple in the implementation
-but looks very complex in the mathematical formulas" (the user's own framing)
-precisely because the spec never actually named the object ms6 needs.
-
-Reread the spec in full (1162 lines) and cross-checked it against the newly
-mounted `/Users/ansari/src/py/ds/metaseries` naive reference implementation
-(`utils.py`/`ms.py`/`ms_fold.py` — the pre-DP ancestor of this repo's own
-`vsum_level_fold_mod`, confirmed by direct numeric comparison across 4 test
-cases, bit-for-bit). Diagnosis: the spec's existing Inner Multiplication
-(`thm:innermult`) and Series Folding (`thm:fold`) sections both formalize
-only the **full/kappa-weighted** instantiation — i.e. the OLD, since-reverted
-`(sum)^d` construction (entry 75) — while ms6 actually runs entirely on the
-**plain/unweighted** instantiation, computing $h_d$ (the complete homogeneous
-symmetric polynomial), for which the spec had no theorem at all. ms6's own
-code comments have had to re-derive this ad hoc rather than cite anything.
-
-Two additions close the gap, both proved from material already in the spec
-rather than invented from scratch:
-
-- **`prop:plainsound`** (inserted right after `thm:sound`): the plain
-  instantiation's `SeriesSum` equals $h_k$ of the positionally-weighted
-  digits — an almost-free corollary of `thm:sound`'s own proof (same
-  multinomial expansion, coefficient 1 instead of kappa at every term).
-- **New §11 "Group Folding"** (`sec:groupfold`, inserted between the renamed
-  "Depth Folding" §10 and the Interface Specification): formalizes the
-  disjoint-union/Cauchy-product fold this session's swappable multi-level
-  fold (entries 76-79) actually relies on — `def:group` (an affine position
-  set `A, A+s, ..., A+(q-1)s`), `lem:cauchy` (standard generating-function
-  factoring over a disjoint union), and `thm:groupfold` (the affine
-  correction factor `gamma(G) = B^(C-(A-1)-s(q-1))`, proved by showing the
-  true-weight/local-weight ratio is constant across a group because the `sp`
-  term cancels identically) — a general statement of exactly what
-  `mul_group_hvec`/`build_partition` compute, independent of ms6's own
-  code. Verified the general theorem itself (not just ms6's specific
-  instantiation of it) with a fresh, ms6-independent probe: 5 cases spanning
-  contiguous blocks, transposed/interleaved groups, uneven group sizes, and
-  a 3-way transpose, all matching direct $h_k$ computation exactly.
-
-Also added: a worked Example/Conformance Vector V10 ($n=6,k=3$,
-$X=(2,3,5,6,7,2)$, continuing the paper's existing "235" motif), verified
-both by direct computation and against `ms_fold.vsum_level_fold` in the
-naive reference module (exact match at $k=2,3$); a disambiguating remark at
-the top of the renamed "Depth Folding" section explaining the two folds are
-independent operations that happen to share the word "folding"; new
-Limitations items (L7 affine-groups-only, L8 no canonical partition
-selection — the latter explicitly scoping ms6's own randomized-choice
-security policy, entries 76-79, as out of scope for this math-only paper);
-a rewritten abstract/introduction leading with plain-English motivation
-(splitting one number's own digits vs. combining several already-separate
-values) and naming "a cryptographic accumulator over batched data" as the
-generic motivating use case, without depending on or naming ms6 itself, to
-address the "look new and interesting" / self-containment half of IACR's
-rejection boilerplate.
-
-### Verified
-
-`pdflatex` (3 passes, to resolve cross-references): clean build, 18 pages,
-zero undefined references, zero LaTeX errors — only pre-existing cosmetic
-font-shape warnings unrelated to this session's edits. The new theorem's
-general form (not tied to ms6's `build_partition` leaf shapes) was probed
-independently in a standalone script before being written up, and V10's
-numbers were checked against both a from-scratch brute-force $h_k$ and the
-naive reference implementation's own `vsum_level_fold`.
-
-Not yet done: `docs/ms6_eprint.tex`'s own Part 1/Part 2 split (outline
-already saved to `docs/ms6_eprint_split_outline.md`, entry not yet written)
-is paused; the plan is to revisit it once this rewritten foundation paper is
-settled, so Part 2's combination/folding sections can cite `prop:plainsound`
-and the new `sec:groupfold` directly instead of re-deriving the same math
-ad hoc, per the user's original request to use this spec as ms6's companion
-document.
-
-## 81. `docs/ms6_eprint.tex` split into `ms6_eprint_part1.tex` / `ms6_eprint_part2.tex`
-
-Followed through on the split proposed in `docs/ms6_eprint_split_outline.md`
-(agreed via AskUserQuestion earlier this session) now that entry 80 gave
-Part 2 something real to cite instead of re-deriving its own math. Request:
-"please rewrite the ms6_eprint into two parts with keeping the simplicity,
-presentation/self-containment."
-
-**Part 1** (`ms6_eprint_part1.tex`, "Construction, Completeness, and
-Binding"): Preliminaries through Binding, mechanically split at the
-outline's agreed boundary (line 785 of the original, right before
-"Structural exposure at the edge columns"). Every forward `\ref` from
-Part 1's kept sections into now-Part-2-only labels (`sec:leak`,
-`sec:decoy`, `sec:governance`, `sec:fold`, `rem:mod-choice`, `op:hash`,
-`op:binding`, etc. — 19 sites, found by a small script diffing each
-`\ref`'s target against which half of the original file defines it) was
-rewritten as prose pointing at "the companion paper (Part II)" rather than
-left as a dangling reference. Abstract, status box, and introduction
-rewritten to drop every edge-column/query-governance preview (previously
-about half their length) and end with an explicit scope statement instead.
-Added a new Remark right after the paper's own Lemma cauchy/Hadamard
-statements, citing entry 80's rewritten `metaseries_foundation_spec.tex`
-directly: `h_d` here is that document's plain instantiation, Lemma cauchy
-is its disjoint-union convolution lemma specialized away from affine
-groups, and Part 2's multi-level fold is the further generalization it
-proves as "group folding" — this is the "use the Meta-Series notation
-wherever possible" ask from earlier in the session, applied for the first
-time. Binding section gained an opening "bottom line, stated once"
-paragraph (proved / assumed / verified-only, three sentences) ahead of its
-four existing subsections, since the honesty was already there but
-required reading all four subsections to piece together. Added a closing
-"Where Part II picks up" section instead of ending mid-argument.
-
-**Part 2** (`ms6_eprint_part2.tex`, "Deployment Hardening, Updatability,
-and Multi-Level Folding"): opens with a new ~130-line "Recap of Part I"
-section rather than assuming Part 1 is open in another tab — restates
-construction/commitment/opening/domain-hash/completeness/binding without
-proof, deliberately re-using Part 1's own label names
-(`sec:construction`, `sec:commit`, `fact:cellprod`, `lem:hadamard`,
-`lem:cauchy`, `thm:completeness`, `rem:lockstep`, `rem:prime-table`, etc.)
-so every existing `\ref` in the ~900 lines carried over from the original
-(Structural exposure, Updatability, Efficiency, Related work, Open
-problems, Conclusion) kept working unmodified — first compile attempt
-surfaced 5 labels the recap had missed (`lem:hadamard`, `lem:cauchy`,
-`thm:completeness`, `rem:lockstep`, `rem:prime-table`), fixed by adding
-each to the recap rather than chasing individual `\ref` sites. Two new
-sections written from this session's own entries 75-79: "Swappable
-Multi-Level Folding" (the partition-menu/recipe design, its own
-"erratum" subsection recording entry 75's root-extraction episode as the
-reason the grouping identity has to be exact rather than merely
-similar-looking, and an explicit statement that this and query governance
-together are still defense-in-depth, not a closure of `op:multiquery` —
-citing the companion foundation paper's group-folding theorem directly
-instead of re-deriving the affine correction factor in ms6-specific
-notation) and "Sparse Domain-Hash Expansion and Wider Grid Width" (entry
-78's construction and measured numbers: flat `chunk_size` 40→100 is
-4.7x slower, but a grouped partition at 100 is 5.9x faster than the old
-40-flat baseline). `op:multiquery`'s own text updated to acknowledge both
-new mitigations without overclaiming resolution. Efficiency section
-gained a front-matter note flagging its own table as measured at the
-now-superseded `chunk_size=40` default, pointing at the new section's
-measurements instead of silently leaving stale numbers looking current.
-Higher-degree-$d$ folding got a one-paragraph placeholder remark
-("planned, not yet started, pending pseudocode") rather than any design
-work, per the standing instruction to wait for that pseudocode.
-
-### Verified
-
-`pdflatex` (3 passes each, both files): Part 1 compiles clean at 15
-pages, Part 2 at 21 pages, zero undefined references and zero warnings of
-any kind on the final pass of either — the 5 missing-label and 19
-dangling-forward-ref issues above were both caught this way, not by
-manual proofreading. Citation lists for each file cross-checked against
-their own `\cite{}` usage before finalizing the bibliography (Part 1 no
-longer cites `CatalanoFiore2013`, used only in Part 2's Related Work).
-
-Not yet done: a full re-benchmark of Part 2's Efficiency table (commit,
-verify, build, append, replace) at the new `chunk_size=100` default —
-flagged in-paper as future work rather than silently left stale.
-
-## 82. Higher-degree-$d$ folding investigated and rejected — the pseudocode from entry 81's placeholder arrived, and turned out not to help
-
-The pseudocode entry 81's Remark was waiting on arrived as `ms6/fold6.py`:
+A pseudocode file arrived as `ms6/fold6.py`:
 fold a large degree $d$ (e.g. 27) by composing three applications of a
 small fixed degree ($k=3$), tracking each intermediate result's own
 row-index (`sq`/`ds` arrays, combined via `comb_pairs`/`eval_combinations`,
@@ -3716,11 +3379,9 @@ across seven more `(values, k, q)` combinations (different sizes, degrees,
 repeated values) — all matched. Folding degree $k$ a total of $q$ times
 genuinely does reproduce $h_{k^q}$ of the original values, provided the
 row-index of each intermediate result is carried forward and used as the
-next stage's position weight. This is the same identity the companion
-foundation paper already proves as multi-stage exponentiation to a
-composite degree — `fold6.py` is a correct, independently-arrived-at
-instance of it, restricted to the coefficient-free (`h_d`, not `n**d`)
-case.
+next stage's position weight — `fold6.py` is a correct instance of
+multi-stage exponentiation to a composite degree, restricted to the
+coefficient-free (`h_d`, not `n**d`) case.
 
 **But it isn't needed, and a corrected efficient version isn't cheaper
 than what already exists.** Two things surfaced before any wiring:
@@ -3772,12 +3433,9 @@ provably doesn't exist for this identity:
 **Conclusion: nothing was wired in.** `vsum_level_fold_mod` is unchanged —
 it already does the job. `fold6.py` stays in the repo as a verified,
 unwired reference implementation of a real identity that just doesn't
-happen to be useful here. Part 2's placeholder Remark (entry 81, "planned,
-not yet designed") is rewritten to state this outcome plainly: the identity
-holds, was checked, and a genuinely efficient version of it is provably no
-cheaper than the direct computation already in use — matching the paper's
-existing practice of naming what was tried and rejected, not just what
-shipped.
+happen to be useful here: the identity holds, was checked, and a
+genuinely efficient version of it is provably no cheaper than the direct
+computation already in use.
 
 ### Verified
 
@@ -3797,17 +3455,12 @@ real `Commitment`/`ps6`/`vs6` round trip at `d=9` (above the shipped
 default) to confirm degree is just a parameter with nothing folding-shaped
 underneath it. Full suite (103 checks across all modules) green.
 
-`docs/ms6_eprint_part2.tex`'s Remark rewritten and recompiled (`pdflatex`,
-3 passes, 21 pages, zero undefined references, zero warnings, no
-short/blank pages via the same `pdfplumber` check used earlier in this
-log).
+## 75. Targeted (non-uniform) fold — a few leaves per row get an extra split, on top of the existing uniform partition menu
 
-## 83. Targeted (non-uniform) fold — a few leaves per row get an extra split, on top of the existing uniform partition menu
-
-Ask: widen `op:multiquery`'s alignment-difficulty surface further (see
-entry 81's `sec:multilevel`) by letting a FEW buckets get extra fold
-depth, rather than the whole row uniformly the way `partition_menu`
-already does. Two things needed checking before writing code: does this
+Ask: widen the multi-query alignment-difficulty surface further by
+letting a FEW buckets get extra fold depth, rather than the whole row
+uniformly the way `partition_menu` already does. Two things needed
+checking before writing code: does this
 have a sound mathematical basis, and does it actually add anything the
 uniform menu doesn't already give.
 
@@ -3815,14 +3468,13 @@ uniform menu doesn't already give.
 `S`" — the first framing — doesn't hold up: `obs:ratio`'s two-query
 attack works by taking a ratio of two proofs against the same
 commitment, and `S(r,j)` is identical in both regardless of what power
-it's raised to, so it cancels in the ratio no matter the exponent. The
-paper already says this plainly (`sec:differencing`: "blinding S(r,j)
-more heavily does not, by itself, address the interior-column
-exposure"). Confirmed this reading was a dead end before writing
-anything.
+it's raised to, so it cancels in the ratio no matter the exponent —
+blinding `S(r,j)` more heavily doesn't, by itself, address the
+interior-column exposure. Confirmed this reading was a dead end before
+writing anything.
 
-**What does work: non-uniform group-folding.** Re-aimed at
-`sec:multilevel`'s own surface instead. `mul_group_hvec`/
+**What does work: non-uniform group-folding.** Re-aimed at the
+multi-level group-folding surface instead. `mul_group_hvec`/
 `mul_row_grouped` (the verifier-side reconstruction) already process
 each leaf generically by its own `(positions, A, B)` — nothing in them
 assumes leaves are the same size as each other, and the group-folding
@@ -3848,14 +3500,13 @@ such a partition.
   (3) of that base partition's own leaves to split one level deeper —
   same RNG source (`gen`, `SystemRandom`) as every other per-row draw,
   same "never derived from iset" reasoning as the base choice itself
-  (see entry 81/`ms6_vibe.md`'s own account of why `q_chunk_size` was
-  rejected). Disclosure grew from `(choice_idx, sweep)` to `(choice_idx,
-  targets, sweep)` per row.
+  (same reason `q_chunk_size` was rejected, above). Disclosure grew from
+  `(choice_idx, sweep)` to `(choice_idx, targets, sweep)` per row.
 - `vs6.core._vs6_batch`: rebuilds the same partition via
   `build_partition` then `build_targeted_partition`; no changes needed
   to the actual reconstruction math.
 
-**Verified before wiring, same discipline as entry 81:**
+**Verified before wiring, same discipline as always:**
 - 490 randomized trials (`L` in {10, 20, 100}, random base recipes,
   0-3 random targeted leaves each) confirming
   `mul_row_grouped(eval_row_grouped(...))` over a targeted partition
@@ -3880,11 +3531,11 @@ such a partition.
   targeted rows actually occur in practice (not just reachable in
   theory). Full suite green (103 checks) after wiring.
 - Cost is real, as expected: a row that draws targets pays the larger
-  degree-`1..d` sweep for each targeted leaf (same cost shape
-  `sec:multilevel`'s own multi-group disclosure already has), measured
-  at roughly 2-3x a comparable untargeted row's proving cost for a small
-  sample — matching the "a FEW leaves pay it, not the whole row" design
-  intent rather than a claim of being free.
+  degree-`1..d` sweep for each targeted leaf (same cost shape the base
+  multi-group disclosure already has), measured at roughly 2-3x a
+  comparable untargeted row's proving cost for a small sample —
+  matching the "a FEW leaves pay it, not the whole row" design intent
+  rather than a claim of being free.
 
 **Security framing, same honesty as the base multi-level fold:** this
 widens the space of distinct row decompositions an adversary combining
@@ -3892,14 +3543,11 @@ several permitted proofs would need to align — defense-in-depth, not a
 closure of `op:multiquery`. `S(r,j)` being fixed for the life of the
 commitment is untouched by it, exactly like the uniform menu it extends.
 
-Not yet done: the eprint (`ms6_eprint_part2.tex`) is deliberately NOT
-updated for this — explicit instruction to hold off until the protocol
-is finalized, so `sec:multilevel` still describes only the uniform menu
-as of this entry. `fold6.py` remains unwired (entry 82); this entry's
-targeted fold is unrelated to it (this is about which COLUMNS get
-grouped how, not about degree composition).
+`fold6.py` remains unwired (entry 74); this entry's targeted fold is
+unrelated to it (this is about which COLUMNS get grouped how, not about
+degree composition).
 
-## 84. `d` moved out of the public `params` dict (pre-shared only); verifier-side degree-composition folding investigated and rejected
+## 76. `d` moved out of the public `params` dict (pre-shared only); verifier-side degree-composition folding investigated and rejected
 
 Prompted by: "can we hide the `d` value completely from verifier and only
 pass the pairs values (instead of pairs we can call it keys/values) from
@@ -3967,7 +3615,7 @@ The soundness gate is real but the cost kills it. `comb_pairs`/
 `eval_combinations` only compose correctly on the *raw, unbucketed*
 monomial list — `ieval`'s bucket aggregation (the thing that makes today's
 `h_d` sweep compact, `O(d * chunk_size)`) can only happen once, at the very
-end, after every stage; this is the same fact behind entry 82's negative
+end, after every stage; this is the same fact behind entry 74's negative
 result (bucketing between stages loses the cross-product information the
 next stage needs). So the prover can't hand the verifier a compact
 base-degree sweep and let it fold further — it has to hand over the full
@@ -3982,8 +3630,7 @@ sweep rather than raw monomials is to avoid reopening exactly the kind of
 leak `mul_combinations_mod` has (independently closed today at the data
 level via edge-column padding, per `tests/test_modulus.py`'s own
 docstring). Handing the verifier raw per-monomial values reopens that
-surface at a different layer, for no compute saving either — per entry
-82's finding, the verifier still needs data at the full effective degree
+surface at a different layer, for no compute saving either — per entry 74's finding, the verifier still needs data at the full effective degree
 by the later stages, so there's no efficiency win to offset the larger,
 leakier disclosure.
 
@@ -3991,9 +3638,9 @@ leakier disclosure.
 improvement: hides `d` from a bare-`c`-holder, doesn't change what a real
 proof-observer learns). Verifier-side degree-composition folding was not
 implemented — a net loss, not a hardness gain, for the same underlying
-reason entry 82's staged-fold approach doesn't pay for itself. Recorded
+reason entry 74's staged-fold approach doesn't pay for itself. Recorded
 here as a second negative result on the same `fold6.py` identity, distinct
-from entry 82's (that one was about compute cost of composing degree at
+from entry 74's (that one was about compute cost of composing degree at
 all; this one is about the disclosure-size cost of trying to use the same
 composition to narrow what a proof reveals).
 
@@ -4016,11 +3663,7 @@ Full suite: 108 checks, all green (`python3 -m tests`). Both
 to end post-refactor, no regressions, updatability/soundness/benchmark
 sections all correct.
 
-`docs/ms6_eprint_part2.tex` deliberately NOT touched for either part of
-this entry — explicit standing instruction to hold off on any eprint edit
-until the protocol is finalized.
-
-## 85. Two-stage degree fold: wired into the real row-seal, and made to compose with the multi-level group partition
+## 77. Two-stage degree fold: wired into the real row-seal, and made to compose with the multi-level group partition
 
 `ms6.core._seal_grid`'s row-seal changed shape (manual edit, outside this
 entry's own diff): instead of one flat `h_d(H1)` (`vsum_level_fold_mod(d,
@@ -4030,29 +3673,25 @@ intermediate vector, then a second, ordinary degree-`d`
 `vsum_level_fold_mod` collapsing that vector to the row's final scalar.
 This entry covers verifying that construction end to end, fixing what it
 broke, and making it composable with the existing swappable multi-level
-partition (entries 76-79/83) so it's actually usable at the shipped
-`chunk_size=100` — not just replacing entries 75/82's rejected
+partition (entries 70-73/75) so it's actually usable at the shipped
+`chunk_size=100` — not just replacing entries 69/74's rejected
 constructions with a new one that happens to work at toy sizes.
-
-**Ground rule honored throughout:** `docs/ms6_eprint_part2.tex` was not
-touched at any point in this entry, per the standing instruction to hold
-off until the protocol is finalized.
 
 ### Negative results, established before any wiring
 
 Several staged-composition ideas were tested in isolation
 (`ms6/fold6_coef.py`, a user-maintained toy file rewritten across several
-iterations) before touching real files, extending entry 82's plethysm
+iterations) before touching real files, extending entry 74's plethysm
 finding (composing `h_k` with `h_k` isn't `h_{k^2}`) to the coefficient-
 weighted case:
 
 - All-`coef=True` staged folding (`q` rounds of `eval_level_mod(k, vals,
   mod, coef=True)` bucket-summed) reduces exactly to `S^(k^q)` — same
-  rank-1 root-extraction vulnerability as entry 75's rejected `(sum)^d`
+  rank-1 root-extraction vulnerability as entry 69's rejected `(sum)^d`
   construction, just reached by a different route.
 - `coef=True` for `q-1` rounds then `coef=False` for the last isn't
   reducible to a function of the sum alone (varying values with the same
-  sum give different outputs — the same fact behind entry 82's Newton's-
+  sum give different outputs — the same fact behind entry 74's Newton's-
   identity finding), but the edge-bucket leak persists at the sweep's own
   boundary and the ratio-cancellation attack (see below) still cancels out
   cleanly there.
@@ -4112,7 +3751,7 @@ than guessed at further.
   checks passed" result — this was not caused by this entry's own edits,
   and is called out here so it isn't mistaken for one.
 - **Wrong-`d` verification crashed instead of failing cleanly.** vs6()'s own
-  documented contract (entry 84: wrong `d` always raises `AssertionError` or
+  documented contract (entry 76: wrong `d` always raises `AssertionError` or
   `IndexError`, never silently verifies) broke under the two-stage wiring —
   a shape mismatch between the verifier's own `eval_level_mod` sweep and the
   prover's disclosed `ps` now raised `deep_prod`'s generic `ValueError`
@@ -4189,7 +3828,7 @@ special case included) — mirrored into both `ms6/utils6.py` and
 `vs6/utils6.py` per the existing duplication convention.
 `ms6.core._finish_ps6` restored to the pre-bypass `(choice_idx, sweep)`
 disclosure format (git `HEAD`'s own structure — the separate targeted-fold
-layer from entries 83/57 was not restored; it existed only in an
+layer from entries 75/52 was not restored; it existed only in an
 uncommitted state that didn't survive several manual reverts this session,
 and is a possible future addition, not a regression introduced here) using
 `eval_row_grouped` **completely unchanged** — stage 1's Y-side requirement
@@ -4235,12 +3874,10 @@ composition wiring (up from 67/98 under the flat bypass, which failed at
 `test_leak.py`'s format assumption before the disclosure format was
 restored). `tests/run_all.py`'s `MODULES` list confirmed to match its
 current, intentional 11-module content (`test_higher_degree.py` and its
-own entry — added in entry 82 — were removed from the tree and the module
+own entry — added in entry 74 — were removed from the tree and the module
 list outside this entry's own diff; treated as deliberate cleanup, not
 reverted). `.gitignore` gained a `fold6/` entry (the toy/probe files used
 throughout this entry, relocated to their own top-level folder, were never
 meant to ship). `README.md` gained a "Row-seal: the two-stage degree fold"
 section and an updated `Security` bullet reflecting the current
 reconstruction path names; check count corrected from 78 to 98.
-
-`docs/ms6_eprint_part2.tex` was not touched anywhere in this entry.
