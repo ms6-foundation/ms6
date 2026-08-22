@@ -17,5 +17,8 @@ docs/
 # Scratch/toy probes for exploring folding math before wiring into ms6/vs6
 fold6/
 
+# Web (kept out of the repo: currently holds index.html, a static web page)
+web/
+
 # OS
 .DS_Store
