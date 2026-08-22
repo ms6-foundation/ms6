@@ -12,11 +12,12 @@ afterwards without recommitting from scratch.
 > neutralized at the data level (they never carry real digit content) and
 > is now formally defined and proven for that specific exposure. Binding
 > now has a full reduction to named hardness/structural assumptions under
-> either supported modulus (an enforced coprimality precondition makes the
-> prime-modulus case a proof, not an assumption, at one layer); whether
-> repeated openings against the same batch could leak more than a single
-> opening does is the remaining open question. Read [Security](#security)
-> before relying on it.
+> either supported modulus, and single-proof hiding of unclaimed items is
+> now a proved lemma rather than an informal claim (both rest on the same
+> enforced coprimality precondition making the prime-modulus case a proof,
+> not an assumption, at one layer); whether repeated openings against the
+> same batch could leak more than a single opening does is the remaining
+> open question. Read [Security](#security) before relying on it.
 
 ## Layout
 
@@ -257,6 +258,29 @@ Honest limitations, since this is a prototype:
   records the one it used in `params`, and `ps6`/`vs6` read it from there,
   so a commitment under any other modulus (prime or composite) still
   verifies from its own `params`.
+- **Hiding is supplied by the per-cell blinding grid `S(r,j)`, and a
+  single proof's hiding of oset (unclaimed) content is now a proved
+  lemma, not an "S still blinds it" claim.** `S(r,j)` is expanded from
+  the secret batch salt via SHAKE-256 (`_s0_grid`) to a full `mod`-width
+  value per cell, then folded in as `combined[r][j] = row[j] *
+  S(r,j)**d mod m`, where `row[j]` is a public, deterministic function of
+  the oset's own digit counts. Two bijections compose: `x -> pow(x, d,
+  mod)` on `Z_mod*` (the same `gcd(d, mod-1) == 1` guard binding now
+  relies on, above) and `x -> row[j] * x` (group translation, for any
+  fixed nonzero `row[j]` — `cell_pow_product_mod` is never 0 mod a prime
+  `mod`). So if `S(r,j)` is uniform over `Z_mod*` (a SHAKE-256
+  PRG/random-oracle-style assumption — the same caliber as SHAKE128's
+  role in binding), `combined[r][j]` is uniform too, identically so
+  regardless of what `row[j]` — i.e. regardless of oset's actual content
+  — was. Since the entire disclosed proof is a deterministic function of
+  `combined`, this closes single-proof hiding: a lone proof reveals
+  nothing about unclaimed items beyond what the claim set itself implies
+  (`tests/test_hiding.py`, an exact bijection lemma plus a real-pipeline
+  invertibility check at full `DEFAULT_MOD` scale). This requires `S`'s
+  own ring to match `mod` (true by default — see `DEFAULT_S_MOD`) and
+  says nothing about comparing two proofs against the same commitment:
+  that's the multi-query gap below, untouched by this argument, since
+  reusing the same `S` across queries is exactly what breaks it.
 - **Item digests, and the batch-combining fold, both go through a standard
   cryptographic hash.** `H1`/`H2` (the per-item digest) and the seal-tree/
   batch fold that combines per-batch scalars into the final commitment both
@@ -314,7 +338,9 @@ Honest limitations, since this is a prototype:
   this shape; larger, still-permitted differences between claim sets leak a
   messier but not obviously safe aggregate. This is a policy control, not a
   proof of resistance to a more general multi-query adversary, and remains
-  the genuinely open item.
+  the genuinely open item — the single-proof hiding lemma above says nothing
+  about it: reusing the same `S(r,j)` across two proofs is precisely what
+  the lemma requires *not* happening.
 
 `ms6_vibe.md` records what each mechanism defends against and what it does
 not, including several attempts that were tried and reverted.
@@ -326,11 +352,13 @@ python3 -m tests                 # everything, one combined report
 python3 -m tests.test_parity     # one group on its own
 ```
 
-103 checks covering the round trip, updatability (append/replace/delete), the
+109 checks covering the round trip, updatability (append/replace/delete), the
 cached fold tree, the parameter contract and its enforcement (including the
 `gcd(d, mod-1)` binding guard's commit/prove/verify-time enforcement and its
 composite-modulus exemption), modulus sizing and modulus-independence,
-prover/verifier copy parity, a sweep over the parallel batch-routing path, an
+prover/verifier copy parity, a sweep over the parallel batch-routing path, the
+single-proof hiding lemma (an exact small-prime bijection proof plus a
+real-pipeline invertibility check at full `DEFAULT_MOD` scale), an
 adversarial suite (tampered values, wrong-index substitution, fabricated
 values, cross-batch swaps, iset/proof mismatch, and hm equivocation at both
 claimed and unclaimed positions), the root-extraction leak (confirming what's

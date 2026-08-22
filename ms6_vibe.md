@@ -3999,3 +3999,125 @@ but its own composition hasn't been walked through this argument
 step-by-step — flagged in the README as a reasonable next check, not
 assumed to be free. Multi-query correlation (the other open item)
 is untouched by this entry entirely.
+
+## 79. Single-proof hiding: a proved lemma, not "`S(r,j)` still blinds it"
+
+**Request** — after mapping out what actually supplies hiding in
+conversation ("How to mitigate the open item related to the hiding? The
+modulus's job is fingerprinting, not hiding"): "Please address the fix
+#1" (the bucket-level derivation proving single-proof statistical hiding,
+the first of two mitigation paths laid out for the hiding gap — the
+second, an automated salt-rotation helper for the multi-query gap, was
+explicitly deferred).
+
+### The argument
+
+`_ps6_batch` computes, per row `r` and column `j`:
+
+    combined[r][j] = row[j] * S[r][j]**d   (mod)
+
+where `row[j] = cell_pow_product_mod(cnt[j], q, mod)` is a public,
+deterministic function of the OSET's own digit counts at that column
+(same formula `test_leak.py`'s own module docstring already names
+`combined`, for the singleton-bucket case specifically). The entire
+disclosed proof — `eval_row_grouped`'s sweep, for every row — is a
+deterministic function of nothing but this `combined` array plus public
+`(d, mod, partition)`. So single-proof hiding of oset's content reduces
+entirely to one question: does `combined`'s distribution depend on
+`row`, i.e. on which items are actually in oset?
+
+Two bijections compose, for ANY fixed nonzero `row[j]`:
+
+1. `x -> pow(x, d, mod)` is a bijection on `Z_mod*` — entry 78's own
+   lemma, already enforced via the `gcd(d, mod-1) == 1` guard.
+2. `x -> row[j] * x (mod mod)` is a bijection on `Z_mod*` for any fixed
+   nonzero `row[j]` — group translation. `row[j]` is never 0 mod a prime
+   `mod`: `cell_pow_product_mod` starts at 1 and only ever multiplies in
+   powers of the (nonzero, far-smaller-than-`mod`) `DIGIT_PRIMES`.
+
+So `x -> row[j] * pow(x, d, mod) % mod` is a bijection on `Z_mod*`, for
+EVERY possible `row[j]`. If `S[r][j]` is uniform over `Z_mod*`
+(computationally, via `_s0_grid`'s SHAKE-256 expansion — a PRG/
+random-oracle-style assumption on SHAKE-256, the same caliber the binding
+argument already rests on for SHAKE128), `combined[r][j]` is uniform too,
+IDENTICALLY distributed regardless of what `row[j]` — i.e. regardless of
+oset's actual content — was. Applied per column (independent `S` draws
+per cell, per `_s0_grid`'s own docstring) and per row, the whole
+`combined` array, and therefore the whole disclosed proof, has a
+distribution that provably does not depend on oset's content. That's
+single-proof hiding, stated as a lemma rather than left as an informal
+"`S(r,j)` still blinds it."
+
+**Scope, stated precisely — what this does and does not cover:**
+
+- Requires `S`'s own ring to match `mod` (`s_mod == mod`) — true by
+  default (`DEFAULT_S_MOD == DEFAULT_MOD`), but NOT true for a caller who
+  passes a different `s_mod` explicitly (as `tests/test_modulus.py`
+  deliberately does elsewhere, to probe an unrelated ring) — reducing `S`
+  into a different modulus before `pow(S, d, mod)` treats it as a base mod
+  `mod` breaks the lemma's precondition. Found this the hard way: the
+  first draft of this entry's own test used `s_mod=ut.generate_prime(256)`
+  (copying `test_modulus.py`'s pattern for an unrelated check) and the
+  invertibility check failed — not a bug in the lemma, a bug in the test
+  for using a mismatched ring the real default configuration never does.
+- Says nothing about comparing TWO proofs against the same commitment
+  under the SAME `S` — that's exactly where the ratio-cancellation attack
+  (`obs:ratio`, `QueryGovernor`'s own reason for existing) lives, and this
+  lemma doesn't touch it: reusing `S` across queries is precisely what the
+  lemma requires *not* happening.
+- Says nothing about claimed items' own values, which are meant to be
+  revealed, not hidden.
+- Composite `mod` (`LEGACY_MOD_2048`) isn't covered by this specific
+  lemma (which needs a public group order, `mod - 1`, to state the
+  coprimality precondition) — its hiding case, like its binding case
+  (entry 78), would rest on the unknown-order ring instead; not derived
+  here.
+
+### What changed
+
+- **New `tests/test_hiding.py`**, registered in `tests/run_all.py`'s
+  `MODULES` list. Two checks, mirroring `test_leak.py`'s own three-arm
+  discipline (a single "looks random" run proves nothing):
+  1. **Exact, brute-forced bijection at small primes** — for several
+     `(p, d, row_const)` combinations with `gcd(d, p-1) == 1` (enumerating
+     every element of `Z_p*`, not sampling), plus a negative control
+     (`d` NOT coprime to `p-1`) confirming the check would actually catch
+     a violation, not pass vacuously.
+  2. **The same map at the shipped `DEFAULT_MOD`/`D`, on REAL pipeline
+     values** — builds a real `Commitment`, opens several different claim
+     sets against the same batch (so `row[j]` genuinely varies), computes
+     `row[j]` via the actual `col_digit_counts`/`cell_pow_product_mod`
+     helpers the live pipeline uses (not a synthetic constant), and
+     confirms `combined[r][j]` is invertible back to the real `S[r][j]`
+     every time, at full 256-bit scale where brute-forcing every element
+     isn't possible.
+  Deliberately no statistical/distributional sampling check: an exact
+  bijection proof is strictly stronger evidence than a statistical
+  closeness test, and sampling would only add flakiness risk for zero
+  added rigor — consistent with how `test_leak.py` itself relies on exact
+  invariance checks rather than distribution sampling.
+- **`README.md`**: new Security bullet stating the lemma and its scope
+  directly after the existing "modulus's job is fingerprinting, not
+  hiding" bullet; the multi-query-correlation bullet updated to note the
+  lemma doesn't touch it, for the reason above; check count corrected
+  from 103 to 109; top status callout updated.
+
+### Verified
+
+`python3 -m tests`, full run: **109/109 checks**, including all 6 new
+`test_hiding` checks (both groups above, plus supporting checks: the
+`gcd` precondition restated, `row[j]` never 0, and `row[j]` genuinely
+varying across the claim sets tried so the invertibility check isn't
+exercising a single degenerate case).
+
+### What this does not close
+
+Multi-query correlation (`QueryGovernor`'s policy-only mitigation) is
+untouched — deferred by the user's own framing of this entry's request
+("fix #1" specifically, not the salt-rotation helper discussed as a
+second option). The multi-level/grouped fold's own composition (same
+caveat as entry 78's "what this does not close") is also not walked
+through this specific argument step-by-step, though the argument here is
+applied at the `combined` INPUT level, before any combinatorial
+processing happens, so it plausibly extends unchanged regardless of
+grouping — not yet stated as a proof.
