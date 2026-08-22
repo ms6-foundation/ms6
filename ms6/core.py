@@ -519,7 +519,12 @@ def _h1_salt(s, batch_index):
     being fixed across every opening of a commitment, letting two
     suitably-chosen openings cancel it out of their ratio -- is not
     addressed here either; QueryGovernor (below) is this codebase's
-    deployment-level (policy, not cryptographic) mitigation for that one.
+    deployment-level policy mitigation for that one (refuse the
+    worst-shaped queries within a salt window), paired with
+    Commitment.rotate_batch_salt() (bounds how long any one salt stays
+    exploitable at all) -- neither is a cryptographic fix, see
+    ms6_vibe.md entry 80 and README's Security section for what each
+    does and does not close.
 
     SHAKE-256 (not Random(seed), not reusing perm's own Mersenne-Twister
     output): same reasoning as _s0_grid's own docstring -- a construction

@@ -164,10 +164,11 @@ own `coef=True` reconstruction of the claimed side against it — the resulting
 inner vector is fully public once combined, so the second fold needs no further
 secret-splitting.
 
-This does **not** close either of the two documented leak paths below — the
-disclosure shape (and therefore what a given proof reveals) is identical to the
-single-stage construction it replaced, since it's the same `eval_row_grouped`
-sweep either way. What it changes is the effective degree an attacker has to
+This does **not** close the structural root-extraction exposure or the
+multi-query correlation risk documented below — the disclosure shape (and
+therefore what a given proof reveals) is identical to the single-stage
+construction it replaced, since it's the same `eval_row_grouped` sweep
+either way. What it changes is the effective degree an attacker has to
 invert for degree-based guessing attacks (e.g. the ratio-cancellation attack
 under `QueryGovernor` below needs a `d²`-order root instead of a `d`-order one)
 — harder, not eliminated.
@@ -237,27 +238,6 @@ see [Security](#security) for exactly what it does and does not close.
 
 Honest limitations, since this is a prototype:
 
-- **A structural exposure, neutralized at the data level rather than behind a
-  hardness assumption.** The combinatorial bucketing underneath both
-  reconstruction paths (`mul_combinations_mod`/`mul_group_hvec` for the
-  original target, `mul_combinations_bucket_vec`/`mul_group_bucket_vec` for
-  the two-stage one — see [Row-seal](#row-seal-the-two-stage-degree-fold))
-  gives EVERY column — not just the two combinatorial-extreme ones — a raw,
-  invertible pure-power term sitting at a publicly-computable position in its
-  own bucket: reading one back costs one modular root extraction, regardless
-  of `mod`. Rather than raise that cost, the construction ensures the read
-  yields nothing over the columns nearest each edge: those are reserved for
-  digits derived deterministically from the item's own hash under a
-  domain-separating tag, disjoint from where real digit content is ever
-  written. A successful extraction there is therefore always possible and
-  always decoy — verified numerically (`tests/test_leak.py`), not just
-  argued structurally. The remaining (real-data) columns are root-extractable
-  the same way, but a single such extraction alone reveals nothing on its
-  own — `S(r,j)` still blinds it; see the next point and `QueryGovernor`
-  above for what turns that extraction into actual exposure. The two-stage
-  fold does not change any of this — the prover's disclosure is byte-for-byte
-  the same sweep either way, so this leak's surface is identical regardless
-  of which target the verifier reconstructs from it.
 - **The modulus's job is fingerprinting, not hiding — sized accordingly.**
   `DEFAULT_MOD` is a 256-bit nothing-up-my-sleeve prime (derived
   transparently from pi's digits — see its comment in `utils6.py`), not the
@@ -265,38 +245,15 @@ Honest limitations, since this is a prototype:
   turned out not to be achievable through modulus choice under this
   construction at any size — mod a prime the group order is always public,
   so a `d`-th root is one `pow()` away regardless of bit length — so the
-  decoy neutralization above is what actually has to hold, and does,
-  independent of the modulus (`tests/test_leak.py`). The old composite is
-  still available as `LEGACY_MOD_2048` for anyone who wants that redundant
-  unknown-order layer anyway, at a measured ~2-3× arithmetic cost for the
-  exponentiation-dominated operations throughout `ps6`/`vs6`. `mod` is not
-  baked into the protocol either way: `ms6()`
-  records the one it used in `params`, and `ps6`/`vs6` read it from there,
-  so a commitment under any other modulus (prime or composite) still
-  verifies from its own `params`.
-- **Hiding is supplied by the per-cell blinding grid `S(r,j)`, and a
-  single proof's hiding of oset (unclaimed) content is now a proved
-  lemma, not an "S still blinds it" claim.** `S(r,j)` is expanded from
-  the secret batch salt via SHAKE-256 (`_s0_grid`) to a full `mod`-width
-  value per cell, then folded in as `combined[r][j] = row[j] *
-  S(r,j)**d mod m`, where `row[j]` is a public, deterministic function of
-  the oset's own digit counts. Two bijections compose: `x -> pow(x, d,
-  mod)` on `Z_mod*` (the same `gcd(d, mod-1) == 1` guard binding now
-  relies on, above) and `x -> row[j] * x` (group translation, for any
-  fixed nonzero `row[j]` — `cell_pow_product_mod` is never 0 mod a prime
-  `mod`). So if `S(r,j)` is uniform over `Z_mod*` (a SHAKE-256
-  PRG/random-oracle-style assumption — the same caliber as SHAKE128's
-  role in binding), `combined[r][j]` is uniform too, identically so
-  regardless of what `row[j]` — i.e. regardless of oset's actual content
-  — was. Since the entire disclosed proof is a deterministic function of
-  `combined`, this closes single-proof hiding: a lone proof reveals
-  nothing about unclaimed items beyond what the claim set itself implies
-  (`tests/test_hiding.py`, an exact bijection lemma plus a real-pipeline
-  invertibility check at full `DEFAULT_MOD` scale). This requires `S`'s
-  own ring to match `mod` (true by default — see `DEFAULT_S_MOD`) and
-  says nothing about comparing two proofs against the same commitment:
-  that's the multi-query gap below, untouched by this argument, since
-  reusing the same `S` across queries is exactly what breaks it.
+  scheme's actual defenses (edge-column decoy padding, and the hiding lemma
+  below) are what have to hold, and do, independent of the modulus
+  (`tests/test_leak.py`). The old composite is still available as
+  `LEGACY_MOD_2048` for anyone who wants that redundant unknown-order layer
+  anyway, at a measured ~2-3× arithmetic cost for the exponentiation-dominated
+  operations throughout `ps6`/`vs6`. `mod` is not baked into the protocol
+  either way: `ms6()` records the one it used in `params`, and `ps6`/`vs6`
+  read it from there, so a commitment under any other modulus (prime or
+  composite) still verifies from its own `params`.
 - **Item digests, and the batch-combining fold, both go through a standard
   cryptographic hash.** `H1`/`H2` (the per-item digest) and the seal-tree/
   batch fold that combines per-batch scalars into the final commitment both
@@ -305,45 +262,16 @@ Honest limitations, since this is a prototype:
   security claims. A separate digit-substitution `hash()` still exists, but
   only for one remaining internal purpose (sizing the secret salt's range)
   — it is not used for item hashing or the batch-combining fold anymore.
-- **`H1` is salted per batch**, closing an offline dictionary-attack gap:
-  without a salt, anyone can hash a candidate value and compare it against a
-  quantity extracted from a proof, with zero interaction — practical over a
-  low-entropy item space (the stated use case: SSNs, names, DOBs). The salt
-  is secret until any item in that batch is opened, same threat model as the
-  blinding grid and column permutation.
-- **The neutralized (edge) columns carry no information, unconditionally.**
-  Their `H`-side content is a fixed public constant regardless of which
-  items are claimed, so the ratio between any two proofs' edge-column
-  values against the same commitment is always exactly 1 — not a bounded
-  leak, no information at all (`tests/test_leak.py`). This says nothing
-  about the non-edge columns.
-- **Binding now reduces to named hardness/structural assumptions, not an
-  empirical fingerprinting argument.** The row-fold's final step is
-  `committer_h = pow(vsum_level(1, full_row), d, mod)`; binding needs this
-  map injective, i.e. no two distinct grids collide under it. That
-  decomposes into three independent layers, each closed on its own terms:
-  the per-cell exponent map is injective by unique factorisation
-  (`DIGIT_PRIMES`, one prime per decimal digit — a proof, not an
-  assumption); item digests and the batch-combining fold rest on SHAKE128
-  collision resistance (a standard, named hash assumption); and the
-  degree-`d` power step is now, for a **prime** `mod`, an enforced
-  `gcd(d, mod - 1) == 1` precondition (`_validate_d` in `ms6/core.py` and
-  `vs6/core.py`, checked at commit, prove, *and* verify time) that makes
-  `x -> pow(x, d, mod)` a bijection on `Z_mod*` by elementary group
-  theory — an unconditional fact, not a hardness assumption, so two
-  distinct valid grids provably cannot collide there. Violating that
-  precondition doesn't just make the structural-exposure root extraction
-  above ambiguous, it reopens a genuine collision; the guard rejects any
-  `(d, mod)` pairing that would (`tests/test_modulus.py`). For a
-  **composite** `mod` (`LEGACY_MOD_2048`), the guard is skipped and the
-  same step's binding instead rests on the standard Strong-RSA-style
-  argument unknown-order RSA accumulators have always used — the modulus's
-  unknown factorisation was already doing this job, just previously
-  credited only with supplying hiding. What this does *not* yet cover: the
+- **Binding's base case is closed; its composition with the multi-level
+  fold is not yet.** The row-fold's degree-`d` power step is, for a prime
+  `mod`, an enforced `gcd(d, mod - 1) == 1` precondition (`_validate_d`,
+  checked at commit/prove/verify time) that makes it a bijection by
+  elementary group theory — see `ms6_vibe.md` entry 78 for the full,
+  now-closed reduction. What that entry does *not* cover: the
   multi-level/grouped fold (`mul_group_bucket_vec` and friends, see
   [Row-seal](#row-seal-the-two-stage-degree-fold)) is built from repeated
-  application of this same primitive, but its own composition hasn't been
-  walked through this argument step-by-step — a reasonable next check, not
+  application of the same primitive, but its own composition hasn't been
+  walked through the argument step-by-step — a reasonable next check, not
   assumed to be free.
 - **Multi-query correlation over the non-edge columns is demonstrated, not
   just suspected.** Two ordinary, unrelated single-item openings against
@@ -354,9 +282,11 @@ Honest limitations, since this is a prototype:
   this shape; larger, still-permitted differences between claim sets leak a
   messier but not obviously safe aggregate. This is a policy control, not a
   proof of resistance to a more general multi-query adversary, and remains
-  the genuinely open item — the single-proof hiding lemma above says nothing
-  about it: reusing the same `S(r,j)` across two proofs is precisely what
-  the lemma requires *not* happening.
+  the genuinely open item. Single-proof hiding (a lone proof reveals nothing
+  about unclaimed items — `ms6_vibe.md` entry 79) is closed and says nothing
+  about this: reusing the same `S(r,j)` across two proofs, which is exactly
+  what this residual risk depends on, is precisely what that lemma requires
+  *not* happening.
 - **`Commitment.rotate_batch_salt(b)` bounds the window, it does not close
   the gap.** Draws a fresh salt for one batch and reseals only that
   batch's `S0`/`h`/`S` (`tests/test_salt_rotation.py` demonstrates both
@@ -377,6 +307,13 @@ Honest limitations, since this is a prototype:
   deliberately left alone, since re-deriving them would need exactly
   that). Pair with `QueryGovernor` for defense in depth; neither is a
   proof of resistance to a general multi-query adversary on its own.
+
+Closed items — the structural root-extraction exposure (edge-column decoy
+padding, verified to always expose decoy content, never real data), the
+single-proof hiding lemma, the offline dictionary-guessing gap (`H1`
+salting), and binding's base-case reduction — are proven and are not
+repeated here as limitations; `ms6_vibe.md` (entries 34–47, 61, 78, 79)
+records each one's own derivation and verification.
 
 `ms6_vibe.md` records what each mechanism defends against and what it does
 not, including several attempts that were tried and reverted.

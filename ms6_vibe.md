@@ -4238,3 +4238,95 @@ adjacent mitigation (bounding exposure) paired with `QueryGovernor`
 resistance to a general multi-query adversary. That proof would still
 mean decoupling `c` from `S` and adding a per-query rerandomization
 argument — entry 48's option 3, still not attempted.
+
+## 81. README's `Security` section trimmed to genuinely open items; one stale docstring found and fixed
+
+**Request** — "Please remove the closed items from the Honest limitations
+from the readme file. please cleanup the comments and remove any stalled
+comments then commit, merge the branch into the main branch and delete
+the committed branch."
+
+### `README.md`
+
+The `## Security` list had grown to include several bullets that were
+already fully closed (each said so in its own text — "closes",
+"proven", "unconditionally") sitting alongside the genuinely still-open
+ones, which no longer read as an honest *limitations* list so much as a
+changelog. Removed outright: the structural root-extraction exposure
+bullet (proven neutralized, entry 41), the single-proof hiding lemma
+bullet (entry 79 — "this closes single-proof hiding"), the `H1`
+per-batch salting bullet (closes the offline dictionary gap, entry 47),
+and the edge-columns-carry-no-information bullet (proven unconditional).
+The binding bullet was trimmed to keep only its genuine residual (the
+multi-level/grouped fold's own composition hasn't been walked through
+the argument) rather than repeating the now-closed base-case derivation.
+
+Removing four-and-a-half bullets left dangling references in the
+survivors and in one other section, fixed in the same pass rather than
+left broken:
+
+- The modulus bullet referenced "the decoy neutralization above" (the
+  now-removed structural-exposure bullet) — reworded to a self-contained
+  clause.
+- The multi-query bullet referenced "the single-proof hiding lemma
+  above" (also removed) — reworded to state, self-contained, that
+  single-proof hiding is closed and doesn't reach this residual risk.
+- [Row-seal](#row-seal-the-two-stage-degree-fold)'s own text said "does
+  not close either of the two documented leak paths below", written when
+  the Security list bulleted both by name — reworded to name them
+  directly instead of counting bullets that may no longer both exist as
+  bullets.
+
+Added one closing line naming what was removed and pointing at
+`ms6_vibe.md`'s own entries (34–47, 61, 78, 79) for anyone who wants the
+resolved items' derivations, rather than silently dropping them with no
+trace of where the reasoning went.
+
+Also caught and fixed while touching this section: the `Layout` file
+listing's own tree comment still said "98 checks" — stale since before
+this session's binding/hiding/rotation work (entries 78-80 had each
+correctly updated the `Tests` section's own count, but this second,
+separate mention in the file tree was missed each time). Corrected to
+124 alongside the `Tests` section, and both listings gained the three
+new test modules (`test_hiding.py`, `test_salt_rotation.py`, and
+`bench.py`'s rotation line).
+
+### Comment sweep
+
+Targeted greps for patterns a redesign this session would plausibly have
+made stale (mirroring entry 56's own method): `TODO`/`FIXME`/`XXX`/
+`HACK` markers (none found), dead-file references like
+`test_higher_degree.py`/`check_leak.py` (none found; `fold6.py` is
+referenced by name in `utils6.py`'s `vsum_level_fold_mod` docstring as
+lineage, not a broken path — confirmed `fold6/fold6.py` still exists),
+stale check-count numbers embedded in code comments (none), and
+"not (yet) enforced/validated/checked" style language that entry 78's
+new guard might have made false (none).
+
+One real hit: `_h1_salt`'s own docstring (`ms6/core.py`) still said its
+"sibling risk" (`S(r,j)` fixed across every opening) "is not addressed
+here either; QueryGovernor (below) is this codebase's deployment-level
+(policy, not cryptographic) mitigation for that one" — written before
+entry 80 existed. `rotate_batch_salt` doesn't make that sentence WRONG
+(QueryGovernor genuinely is a mitigation, still not a fix), but it's now
+an incomplete answer to a question the docstring itself raises. Extended
+it to name `rotate_batch_salt` alongside `QueryGovernor` and point at
+entry 80/README for the fuller picture.
+
+Deliberately did NOT do a second eprint-reference purge across `ms6/`,
+`vs6/`, `tests/`, and `examples/` — five files still mention
+`docs/ms6_eprint.tex` or "the eprint" by name (`ms6/core.py`,
+`ms6/utils6.py`, both example scripts, `test_query_governance.py`).
+That earlier cleanup (entries 6-9 of this branch's own work) was scoped
+explicitly to `ms6_vibe.md`; this request's own wording ("cleanup the
+comments and remove any stalled comments") is about staleness, not a
+second, broader eprint-purge request, and the standing constraint from
+earlier in this session (never touch `docs/ms6_eprint_part2.tex`, and by
+extension not go hunting for every mention of it elsewhere without being
+asked) still applies. Flagged here rather than silently expanding scope.
+
+### Verified
+
+`python3 -m tests`, full run: **124/124 checks** — this entry's changes
+are comments and documentation only, so an unchanged count was the
+expected (and confirmed) outcome, not just an assumption.
