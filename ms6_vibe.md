@@ -3881,3 +3881,121 @@ throughout this entry, relocated to their own top-level folder, were never
 meant to ship). `README.md` gained a "Row-seal: the two-stage degree fold"
 section and an updated `Security` bullet reflecting the current
 reconstruction path names; check count corrected from 78 to 98.
+
+## 78. `gcd(d, mod-1) == 1`: closing the binding gap for the prime-modulus path
+
+**Request** — after walking through the row-fold's actual binding argument
+in conversation ("how we can mitigate this open item related to binding?"):
+"Yes, implement the `gcd` guard + test and update the README/vibe log to
+reflect the closed reduction."
+
+### The argument
+
+Binding needs the row-fold's final step, `committer_h = pow(vsum_level(1,
+full_row), d, mod)`, to be injective: no two distinct grids may map to the
+same committed value. That decomposes into three independent layers:
+
+1. **The per-cell exponent map is already injective — a proof, not an
+   assumption.** `DIGIT_PRIMES` (entries 36–37) gives each decimal digit
+   its own prime, so unique factorisation rules out collisions there.
+2. **Item digests and the batch-combining fold rest on SHAKE128
+   collision resistance** (entry 46) — a standard, named hash assumption.
+3. **The degree-`d` power step was the actual gap.** It was only checked
+   empirically (adversarial fuzzing, no collision ever found) rather than
+   proven — the "empirical fingerprinting argument" the README and
+   `ms6_vibe.md`'s own open-items list had flagged since entry 61.
+
+Layer 3 turns out to be closable outright, not just better-tested. For a
+**prime** `mod`, `x -> pow(x, d, mod)` is a bijection on `Z_mod*` exactly
+when `gcd(d, mod - 1) == 1` — elementary group theory (the inverse map is
+`x -> pow(x, pow(d, -1, mod - 1), mod)`), independent of any hardness
+assumption. `DEFAULT_MOD` and the project's own default `d=3` already
+happen to satisfy this (`gcd(3, DEFAULT_MOD - 1) == 1`, checked directly),
+but nothing enforced it — an even `d`, or a `d` sharing a factor with
+`mod - 1`, silently reopens a real collision (not merely ambiguous root
+extraction, an actual forgeable binding break), and nothing in the
+codebase would have caught it. This precondition was already known and
+handled once before, locally: `tests/test_leak.py`'s ARM 2 setup retries
+its randomly generated prime until `gcd(d, prime_mod - 1) == 1`, with a
+comment explaining exactly why — that pattern is the direct precedent for
+this entry's fix, generalized from a leak-test setup detail into an
+enforced library invariant.
+
+For a **composite** `mod` (`LEGACY_MOD_2048`), the analogous case was
+already sitting there unclaimed: an unknown-order RSA modulus makes
+computing `d`-th roots hard by the standard Strong-RSA-style argument
+real RSA accumulators rely on. The project had only ever credited that
+modulus with supplying *hiding* (entry 35); it was already doing binding's
+job too, just not written down as such.
+
+### What changed
+
+- **`ms6/core.py` and `vs6/core.py`**: `_validate_d(d, mod=None)` (was
+  `_validate_d(d)`) now also checks `gcd(d, mod - 1) == 1` whenever `mod`
+  is prime (`ut.is_prime(mod)`), raising `ParamMismatch` with an
+  explanation otherwise. Skipped entirely for composite `mod` — the
+  Strong-RSA-style case doesn't use this precondition. Wired into all
+  three real entry points: `ms6()` (new call, commit time), `ps6()`
+  (existing call, reordered after `unpack_params` so `mod` is available),
+  and `vs6()` (same reorder). Also added to `Commitment.__init__`, which
+  turned out to have its own independent construction path (`_new_batch`)
+  that never called `ms6()` at all and so never validated `d` — not even
+  the pre-existing positivity check — until now.
+- **`vs6/utils6.py`**: gained `is_prime` (identical Miller-Rabin
+  implementation to `ms6/utils6.py`'s copy), the one deliberate exception
+  to that module's documented "only what vs6's call graph touches for
+  reconstruction" minimalism — it's a structural, no-secrets check on
+  data the verifier already receives from the prover (same category as
+  `_validate_params`), not a prover capability, since it never generates
+  a prime, only tests one. Module docstring updated to say so explicitly
+  rather than silently break the stated invariant.
+- **`tests/test_modulus.py`**: new checks — `gcd(d, DEFAULT_MOD - 1) ==
+  1` holds for the shipped default; a deliberately-bad `(d, prime mod)`
+  pairing is rejected by `Commitment`/`ms6()` (`ms6.core.ParamMismatch`),
+  by `ps6()` (also `ms6.core.ParamMismatch`), and by `vs6()`
+  (`vs6.core.ParamMismatch` — a separate class from ms6's own, by design:
+  `vs6/core.py` has zero import-time dependency on `ms6/core.py`, so it
+  cannot import ms6's exception type); and the same bad `d` is accepted
+  unconditionally under a composite modulus, confirming the guard doesn't
+  misfire where it doesn't apply. Also fixed a latent flakiness the new
+  guard would otherwise have exposed: `other_prime`'s generation used a
+  bare `ut.generate_prime(512)` with no coprimality retry, which fails
+  `gcd(3, p-1) == 1` for roughly half of random primes (any `p == 1 mod
+  3`) — now retries, mirroring `test_leak.py`'s existing pattern for the
+  same precondition.
+- **`tests/test_params.py`**: `wrong_d_fails`'s except clause widened to
+  also catch `ParamMismatch` (vs6's) — probing `wrong_d = B.d - 1 = 2`
+  against the prime `DEFAULT_MOD` now correctly gets caught immediately
+  by the new guard (any even `d` shares mod-1's factor of 2 with any odd
+  prime) rather than surfacing only as a deeper `AssertionError`/
+  `IndexError` from a broken reconstruction. Still "correctly rejected
+  either way," per the test's own stated standard — just via a stricter,
+  earlier mechanism now.
+- **`tests/test_completeness.py`**: its five parallel batch-routing
+  configs used `d=2` in three places, incidental to what the sweep
+  actually tests (batch-routing depends on `N`/`batch_size`, not `d`).
+  Changed to `d=3` throughout — the same value already used elsewhere in
+  the suite, and coprime to `DEFAULT_MOD - 1`.
+- **`README.md`**: top status callout and the `Security` section's
+  binding bullet rewritten to state the closed reduction (split into a
+  now-largely-closed binding bullet and a separate, still-fully-open
+  multi-query-correlation bullet — that one is untouched by this entry).
+  Check count corrected from a stale 78 to the current 103 (98 before
+  this entry's own 5 new checks — matches entry 77's own "98/98" run,
+  even though the README text itself had reverted or never actually
+  picked up that correction).
+
+### Verified
+
+`python3 -m tests`, full run: **103/103 checks**, including every new
+guard check, the widened `wrong_d_fails` catch, and the re-parameterized
+completeness sweep.
+
+### What this does not close
+
+The multi-level/grouped fold (`mul_group_bucket_vec` and friends) is
+built from repeated application of this same `pow(x, d, mod)` primitive,
+but its own composition hasn't been walked through this argument
+step-by-step — flagged in the README as a reasonable next check, not
+assumed to be free. Multi-query correlation (the other open item)
+is untouched by this entry entirely.

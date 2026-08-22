@@ -44,15 +44,21 @@ def run(check):
     def wrong_d_fails(wrong_d):
         """d is no longer pinnable via expect= (see PARAM_KEYS's own comment
         -- it isn't a params key at all any more), so a wrong d can't surface
-        as ParamMismatch. It still can't verify silently either: reconstruction
-        itself breaks -- AssertionError (final h==c check) if wrong_d is low,
-        typically IndexError (walking past the end of a sweep sized by the
-        prover's true, lower degree) if wrong_d is high. Either counts as
-        correctly rejected here."""
+        as a params-mismatch in the pinning sense. It still can't verify
+        silently either: reconstruction itself breaks -- AssertionError
+        (final h==c check) if wrong_d is low, typically IndexError (walking
+        past the end of a sweep sized by the prover's true, lower degree) if
+        wrong_d is high. Since the gcd(d, mod-1) binding guard (ms6_vibe.md
+        entry 78), a wrong_d that happens to share a factor with (prime)
+        mod-1 -- any even wrong_d, since mod-1 is always even for an odd
+        prime -- is instead rejected immediately as ParamMismatch, before
+        reconstruction even runs. All three count as correctly rejected
+        here: the point is that a mismatched d never verifies, not which
+        mechanism catches it first."""
         try:
             vs6(c_b, {0: B.vals[0]}, ps6({0}, h_b, hm_b, s_b, p_b, B.d), x_b, perm_b, h1s_b, p_b, wrong_d)
             return False
-        except (AssertionError, IndexError):
+        except (AssertionError, IndexError, ParamMismatch):
             return True
 
     check("params        : wrong d (lower) fails verification",

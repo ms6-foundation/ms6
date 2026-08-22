@@ -1,6 +1,6 @@
 # ms6
 
-A batched, updatable commitment scheme with selective opening.
+A Meta-Series based batched, updatable commitment scheme with selective opening.
 
 Commit once to a list of values. Later, prove that specific positions hold
 specific values — without revealing anything else in the list, and without the
@@ -11,10 +11,12 @@ afterwards without recommitting from scratch.
 > columns per row, always readable via a modular root extraction — is
 > neutralized at the data level (they never carry real digit content) and
 > is now formally defined and proven for that specific exposure. Binding
-> still lacks a full reduction to a named hardness assumption, and whether
+> now has a full reduction to named hardness/structural assumptions under
+> either supported modulus (an enforced coprimality precondition makes the
+> prime-modulus case a proof, not an assumption, at one layer); whether
 > repeated openings against the same batch could leak more than a single
-> opening does is an open question. Read [Security](#security) before
-> relying on it.
+> opening does is the remaining open question. Read [Security](#security)
+> before relying on it.
 
 ## Layout
 
@@ -275,19 +277,44 @@ Honest limitations, since this is a prototype:
   values against the same commitment is always exactly 1 — not a bounded
   leak, no information at all (`tests/test_leak.py`). This says nothing
   about the non-edge columns.
-- **One thing stays genuinely open; the other is demonstrated, not just
-  suspected.** Binding has no reduction to a named hardness assumption — it
-  rests on an empirical fingerprinting argument plus the domain hash's
-  assumed collision resistance, not a proof; that part remains open.
-  Multi-query correlation over the non-edge columns is no longer just a
-  theoretical concern: two ordinary, unrelated single-item openings against
+- **Binding now reduces to named hardness/structural assumptions, not an
+  empirical fingerprinting argument.** The row-fold's final step is
+  `committer_h = pow(vsum_level(1, full_row), d, mod)`; binding needs this
+  map injective, i.e. no two distinct grids collide under it. That
+  decomposes into three independent layers, each closed on its own terms:
+  the per-cell exponent map is injective by unique factorisation
+  (`DIGIT_PRIMES`, one prime per decimal digit — a proof, not an
+  assumption); item digests and the batch-combining fold rest on SHAKE128
+  collision resistance (a standard, named hash assumption); and the
+  degree-`d` power step is now, for a **prime** `mod`, an enforced
+  `gcd(d, mod - 1) == 1` precondition (`_validate_d` in `ms6/core.py` and
+  `vs6/core.py`, checked at commit, prove, *and* verify time) that makes
+  `x -> pow(x, d, mod)` a bijection on `Z_mod*` by elementary group
+  theory — an unconditional fact, not a hardness assumption, so two
+  distinct valid grids provably cannot collide there. Violating that
+  precondition doesn't just make the structural-exposure root extraction
+  above ambiguous, it reopens a genuine collision; the guard rejects any
+  `(d, mod)` pairing that would (`tests/test_modulus.py`). For a
+  **composite** `mod` (`LEGACY_MOD_2048`), the guard is skipped and the
+  same step's binding instead rests on the standard Strong-RSA-style
+  argument unknown-order RSA accumulators have always used — the modulus's
+  unknown factorisation was already doing this job, just previously
+  credited only with supplying hiding. What this does *not* yet cover: the
+  multi-level/grouped fold (`mul_group_bucket_vec` and friends, see
+  [Row-seal](#row-seal-the-two-stage-degree-fold)) is built from repeated
+  application of this same primitive, but its own composition hasn't been
+  walked through this argument step-by-step — a reasonable next check, not
+  assumed to be free.
+- **Multi-query correlation over the non-edge columns is demonstrated, not
+  just suspected.** Two ordinary, unrelated single-item openings against
   the same batch (symmetric difference 2, no crafted similarity needed) fully
   recover both claimed items' actual digits at every real column, by root-
   extracting each proof's per-column values and canceling `S(r,j)` via their
   ratio. `QueryGovernor`'s default (`min_new_items=3`, above) blocks exactly
   this shape; larger, still-permitted differences between claim sets leak a
   messier but not obviously safe aggregate. This is a policy control, not a
-  proof of resistance to a more general multi-query adversary.
+  proof of resistance to a more general multi-query adversary, and remains
+  the genuinely open item.
 
 `ms6_vibe.md` records what each mechanism defends against and what it does
 not, including several attempts that were tried and reverted.
@@ -299,15 +326,17 @@ python3 -m tests                 # everything, one combined report
 python3 -m tests.test_parity     # one group on its own
 ```
 
-78 checks covering the round trip, updatability (append/replace/delete), the
-cached fold tree, the parameter contract and its enforcement, modulus sizing
-and modulus-independence, prover/verifier copy parity, a sweep over the
-parallel batch-routing path, an adversarial suite (tampered values,
-wrong-index substitution, fabricated values, cross-batch swaps, iset/proof
-mismatch, and hm equivocation at both claimed and unclaimed positions), the
-root-extraction leak (confirming what's recovered is decoy under the shipped
-default prime, a fresh unrelated prime, and the legacy composite alike, not
-just that extraction fails), and `QueryGovernor`'s refusal/cap/per-batch-
+103 checks covering the round trip, updatability (append/replace/delete), the
+cached fold tree, the parameter contract and its enforcement (including the
+`gcd(d, mod-1)` binding guard's commit/prove/verify-time enforcement and its
+composite-modulus exemption), modulus sizing and modulus-independence,
+prover/verifier copy parity, a sweep over the parallel batch-routing path, an
+adversarial suite (tampered values, wrong-index substitution, fabricated
+values, cross-batch swaps, iset/proof mismatch, and hm equivocation at both
+claimed and unclaimed positions), the root-extraction leak (confirming what's
+recovered is decoy under the shipped default prime, a fresh unrelated prime,
+and the legacy composite alike, not just that extraction fails), and
+`QueryGovernor`'s refusal/cap/per-batch-
 scoping behavior. Exits non-zero on failure with the failing checks named,
 so it works as a CI gate.
 

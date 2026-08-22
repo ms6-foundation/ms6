@@ -274,14 +274,38 @@ def _attach_edges_s(row, h1_salt, slot_index, row_index, rand_edge_size):
 PARAM_KEYS = ("q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
 
 
-def _validate_d(d):
+def _validate_d(d, mod=None):
     """d's own validation, standalone now that it no longer travels inside
-    `params` (see PARAM_KEYS's own comment) -- ps6/vs6 call this at entry
-    since they're where d is now supplied as an explicit, separate
+    `params` (see PARAM_KEYS's own comment) -- ms6/ps6/vs6 call this at
+    entry since they're where d is now supplied as an explicit, separate
     argument rather than read out of a dict that's already been through
-    _validate_params."""
+    _validate_params.
+
+    mod=<prime>: also enforces gcd(d, mod - 1) == 1. Under a prime
+    modulus, x -> pow(x, d, mod) is a bijection on Z_mod* exactly when d
+    is coprime to mod-1 (elementary group theory -- the inverse map is
+    x -> pow(x, pow(d, -1, mod - 1), mod)). That bijectivity is what
+    upgrades the row-fold's binding argument from "no collision found in
+    testing" to "no collision exists": two distinct valid grids cannot
+    map to the same committed value, full stop, independent of any
+    hardness assumption. Violating gcd(d, mod-1)==1 does not just make
+    root-extraction ambiguous -- it reopens exactly that collision. See
+    README's Security section and ms6_vibe.md entry 78 for the full
+    argument. Skipped when mod is composite (e.g. LEGACY_MOD_2048): an
+    unknown-order ring's binding case is the standard Strong-RSA-style
+    argument instead, which this check does not apply to."""
     if not isinstance(d, int) or d < 1:
         raise ParamMismatch(f"d must be a positive int, got {d!r}")
+    if mod is not None and ut.is_prime(mod):
+        from math import gcd
+        if gcd(d, mod - 1) != 1:
+            raise ParamMismatch(
+                f"d={d} is not coprime to mod-1 under prime mod={_brief(mod)} -- "
+                f"pow(x, d, mod) is not a bijection on Z_mod*, which reopens the "
+                f"row-fold collision the degree-d step is meant to rule out (see "
+                f"README's Security section). Pick a d with gcd(d, mod-1) == 1, "
+                f"or use an unknown-order composite mod (e.g. LEGACY_MOD_2048) "
+                f"instead.")
 
 
 def make_params(q, chunk_size=DEFAULT_CHUNK_SIZE, batch_size=DEFAULT_BATCH_SIZE,
@@ -1009,6 +1033,7 @@ def ms6(vals, d, q, s=None, pad_size=DEFAULT_HMAX_PAD_SIZE, s_exp=DEFAULT_S_EXP,
     so the row-level parallelism _ms6_batch itself offers is only used
     when there's a single batch to begin with.
     """
+    _validate_d(d, mod)
     hmax = pad_size+int(str(ut.hash(max(vals), s_mod, s_exp)))
 
     # S's ring: shared with the H side by default -- see DEFAULT_S_MOD.
@@ -1243,6 +1268,7 @@ class Commitment:
         if not vals:
             raise ValueError("Commitment needs at least one value")
 
+        _validate_d(d, mod)
         self.d, self.q, self.s_exp = d, q, s_exp
         self.chunk_size, self.batch_size = chunk_size, batch_size
         self.mod, self.workers = mod, workers
@@ -1795,8 +1821,8 @@ def ps6(iset, h_list, hm_list, s_list, params, d, workers=DEFAULT_WORKERS, expec
     pools; row-level parallelism inside _ps6_batch/_finish_ps6 is only
     used when a single batch is touched.
     """
-    _validate_d(d)
     q, chunk_size, batch_size, mod, _sbs, _red = unpack_params(params, expect)
+    _validate_d(d, mod)
     iset = set(iset)
 
     boundaries = []

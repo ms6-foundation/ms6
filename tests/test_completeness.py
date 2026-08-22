@@ -25,11 +25,17 @@ def make_vals(n):
 def run(check):
     configs = [
         # (N, batch_size, chunk_size, d, q, workers)  -> n_batches
-        (300, 50, 10, 2, 4, 4),   # 6 batches, not divisible by 4 workers
+        # d is 3 (not 2) in every config, not 2 as this sweep originally used --
+        # DEFAULT_MOD is prime, and mod-1 is always even for an odd prime, so
+        # ANY even d fails the gcd(d, mod-1) == 1 binding precondition
+        # (ms6_vibe.md entry 78) against it. Batch-routing (this sweep's own
+        # subject) only depends on N/batch_size, not d, so this substitution
+        # changes nothing this test is actually checking.
+        (300, 50, 10, 3, 4, 4),   # 6 batches, not divisible by 4 workers
         (500, 100, 10, 3, 9, 4),  # 5 batches, not divisible by 4 workers
-        (400, 40, 10, 2, 4, 3),   # 10 batches, not divisible by 3 workers
+        (400, 40, 10, 3, 4, 3),   # 10 batches, not divisible by 3 workers
         (240, 40, 40, 3, 10, 4),  # 6 batches, chunk_size=40 (project default)
-        (200, 20, 10, 2, 4, 5),   # 10 batches, workers > useful parallelism test
+        (200, 20, 10, 3, 4, 5),   # 10 batches, workers > useful parallelism test
     ]
 
     iset_patterns = [

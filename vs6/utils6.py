@@ -16,6 +16,17 @@ everything in ms6/core.py that generates or handles the secret salt
 (SystemRandom, _column_perm's generation -- vs6 only ever *receives* a
 perm, never derives one).
 
+is_prime is the one exception to "only what vs6's call graph touches for
+proof reconstruction": vs6/core.py's _validate_d needs it to enforce
+gcd(d, mod-1) == 1 whenever the (prover-supplied) mod is prime -- the
+precondition for pow(x, d, mod) to be a bijection on Z_mod*, which is what
+makes the row-fold's binding argument a proof rather than an empirical
+claim (see README's Security section, ms6_vibe.md entry 78). This is a
+structural, no-secrets check on data the verifier already receives from
+the prover -- the same category _validate_params already performs -- not
+a prover capability (it never generates a prime, only tests one), so it
+belongs here despite the "reconstruction primitives only" rule above.
+
 Rationale: a party deploying only the verifier (e.g. a bank checking a
 sanctions-registry proof, see zk_sanctions_screening_scale_demo.py) can
 install/audit just this module + vs6/core.py, without ever loading code that
@@ -29,6 +40,7 @@ this split is kept long-term.
 import sys
 import hashlib
 import math
+import secrets
 from collections import Counter, defaultdict
 from itertools import combinations_with_replacement
 
@@ -150,6 +162,36 @@ class Acc:
 class Utils:
     """Verifier-safe subset of ms6.utils6.Utils -- see module docstring for
     exactly what's included/excluded and why."""
+
+    def is_prime(self, n, k=64):
+        """Miller-Rabin primality test with k rounds (probabilistic, very
+        low error rate). Identical to ms6.utils6.Utils.is_prime -- see
+        module docstring for why the verifier needs this despite the
+        "reconstruction primitives only" rule everything else here follows."""
+        if n < 2:
+            return False
+        for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+            if n % p == 0:
+                return n == p
+
+        # Write n-1 as 2^r * d
+        r, d = 0, n - 1
+        while d % 2 == 0:
+            d //= 2
+            r += 1
+
+        for _ in range(k):
+            a = secrets.randbelow(n - 3) + 2  # random witness in [2, n-2]
+            x = pow(a, d, n)
+            if x == 1 or x == n - 1:
+                continue
+            for _ in range(r - 1):
+                x = pow(x, 2, n)
+                if x == n - 1:
+                    break
+            else:
+                return False
+        return True
 
     def cell_product(self, cnt, mult):
         """prod(DIGIT_PRIMES[d]**cnt[d] for d in 0..9) ** mult.

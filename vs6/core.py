@@ -117,11 +117,29 @@ def _attach_edges_pad(row, rand_edge_size):
 PARAM_KEYS = ("q", "chunk_size", "batch_size", "mod", "seal_batch_size", "rand_edge_size")
 
 
-def _validate_d(d):
+def _validate_d(d, mod=None):
     """d's own validation, standalone now that it no longer travels inside
-    `params` -- see PARAM_KEYS's own comment. vs6() calls this at entry."""
+    `params` -- see PARAM_KEYS's own comment. vs6() calls this at entry.
+
+    mod=<prime>: also enforces gcd(d, mod - 1) == 1 -- see ms6/core.py's
+    own _validate_d docstring for the full argument (a prime-modulus
+    degree-d fold is a provable bijection, not an empirically-untested
+    one, exactly when this holds). README's Security section and
+    ms6_vibe.md entry 78 have the rest. Skipped for composite mod (e.g.
+    LEGACY_MOD_2048), whose binding case is the Strong-RSA-style
+    argument instead."""
     if not isinstance(d, int) or d < 1:
         raise ParamMismatch(f"d must be a positive int, got {d!r}")
+    if mod is not None and ut.is_prime(mod):
+        from math import gcd
+        if gcd(d, mod - 1) != 1:
+            raise ParamMismatch(
+                f"d={d} is not coprime to mod-1 under prime mod={_brief(mod)} -- "
+                f"pow(x, d, mod) is not a bijection on Z_mod*, which reopens the "
+                f"row-fold collision the degree-d step is meant to rule out (see "
+                f"README's Security section). Pick a d with gcd(d, mod-1) == 1, "
+                f"or use an unknown-order composite mod (e.g. LEGACY_MOD_2048) "
+                f"instead.")
 
 
 def _brief(v):
@@ -477,8 +495,8 @@ def vs6(c, claims, ps_list, x_list, perm_list, h1_salt_list, params, d, workers=
     parallelism inside _vs6_batch is only used when a single batch is
     touched.
     """
-    _validate_d(d)
     q, chunk_size, batch_size, mod, seal_batch_size, rand_edge_size = unpack_params(params, expect)
+    _validate_d(d, mod)
     assert len(ps_list) == len(x_list) == len(h1_salt_list)
 
     per_batch_vals = [[] for _ in ps_list]
