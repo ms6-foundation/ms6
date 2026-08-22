@@ -23,6 +23,13 @@ def run(check=None):
     print(f"  [info] {len(U.h_list)} batches: replace {t_upd * 1000:.1f} ms "
           f"vs full recommit {t_full * 1000:.1f} ms ({t_full / t_upd:.0f}x)")
 
+    # rotate_batch_salt (ms6_vibe.md entry 80): only S0/h/S for one batch is
+    # recomputed, no item is re-hashed -- expected to land close to replace()'s
+    # own cost (both are exactly one _reseal() call), far below a full recommit.
+    t0 = time.time(); U.rotate_batch_salt(15); t_rot = time.time() - t0
+    print(f"  [info] {len(U.h_list)} batches: rotate_batch_salt {t_rot * 1000:.1f} ms "
+          f"vs full recommit {t_full * 1000:.1f} ms ({t_full / t_rot:.0f}x)")
+
 
 if __name__ == "__main__":
     run()

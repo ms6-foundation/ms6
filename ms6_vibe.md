@@ -4121,3 +4121,120 @@ through this specific argument step-by-step, though the argument here is
 applied at the `combined` INPUT level, before any combinatorial
 processing happens, so it plausibly extends unchanged regardless of
 grouping — not yet stated as a proof.
+
+## 80. `Commitment.rotate_batch_salt`: bounding the multi-query window, not closing it
+
+**Request** — "please address item #2 Build an automated salt-rotation
+helper on `Commitment`", alongside a direct question that shaped the
+whole design: "How this change will fix the multi-query gap without
+creating new commitment per query?"
+
+### Answering the question first, since it set the scope
+
+It doesn't fix the gap, and it isn't per query. Two proofs served inside
+the SAME salt window still cancel `S(r,j)` via ratio exactly as before —
+rotation changes nothing about that mechanism. What it does is bound how
+long any given `S` stays exploitable: rotate on an operator-chosen
+cadence (e.g. when `QueryGovernor.history_for_batch(b)` nears its cap),
+and every query served between two rotations costs nothing extra. It is
+not a new commitment either — same `Commitment` object, same `vals`,
+indices, and every other batch; only the ONE rotated batch's `h`/`S`
+(and therefore `c`) change, the identical shape of change `replace()`/
+`delete()` already make on every call.
+
+### What's actually cheap, and what would not be
+
+Traced exactly what a batch's salt derives before writing anything: `_s0_
+grid` (the blinding grid, `S0`/`S`), `_column_perm` (`perm`), and `_h1_
+salt` (`h1_salt`) are ALL derived from the same per-batch salt — but
+`perm` and `h1_salt` are baked directly into `hm_list[b]`'s STORED,
+permuted, hashed digit content (`_rows_from_hash` uses `perm`; `_hash_
+item` uses `h1_salt` to build H1/H2 in the first place). Rotating those
+too would mean re-hashing and re-permuting every item in the batch —
+essentially `_new_batch` again for that one batch, not a "cheap reseal."
+
+`S0`/`S` is different: `self.salts[b]` has exactly ONE call site in the
+whole class (`self._s0(b)`, feeding `_reseal(b)`) — confirmed by grep
+before writing the method, not assumed. So refreshing `self.salts[b]`
+and calling the ALREADY-EXISTING `_reseal(b)` (the same one `replace()`/
+`delete()` already call on every single-item update) recomputes exactly
+`h_list[b]`/`s_list[b]` from the unchanged `cntH[b]`/`cntS[b]` accumulator
+counts plus the new `S0` — no item touched, no re-hash, no re-permute.
+This is the whole mechanism `rotate_batch_salt(b, new_salt=None)`
+implements: draw a fresh salt (or accept a pinned one), `_reseal(b)`,
+`_refresh_root(leaf=b)`.
+
+### What changed
+
+- **`ms6/core.py`**: `Commitment.rotate_batch_salt(b, new_salt=None)` —
+  new public method, placed after `delete()`. `QueryGovernor` gained
+  `forget_batch(batch_index)`, clearing that batch's recorded claim-set
+  history (returns how many it forgot) — meant to be called right after
+  an actual rotation, since tracking claim-set closeness against a now-
+  replaced `S` no longer protects anything and would only start refusing
+  legitimate new queries for no remaining reason. `QueryGovernor`'s own
+  class docstring updated (it used to say the reseal was "out of scope
+  for this class" without naming where it now lives — now points at both
+  new methods).
+- **`tests/test_salt_rotation.py`** (new, registered in `run_all.py`).
+  Two groups:
+  1. **Fidelity** — rotation changes `h_list[b]`/`c`, leaves `perm`/
+     `h1_salt`/`hm_list`/`vals`/`live_count` byte-identical, an item still
+     proves correctly afterward, and a proof from BEFORE rotation fails
+     to verify against the commitment's state AFTER it (same failure
+     shape `replace()`/`delete()` already produce for stale proofs).
+  2. **The actual question** — reproduces the `obs:ratio` ratio-
+     cancellation attack directly (same technique `test_leak.py`/`test_
+     hiding.py` use: real `row[j]` via `col_digit_counts`/`cell_pow_
+     product_mod`, real `S[r][j]` from a live `Commitment`, at an
+     interior non-edge column) and checks it FOUR ways: works within one
+     salt window (sanity: the attack is real here), works again on a
+     second query in the same window (not a one-off), FAILS across a
+     rotation boundary (comparing a pre-rotation `combined` against a
+     post-rotation one no longer reproduces `row_a/row_b`'s true ratio),
+     and works again within the NEW window after rotation (proving the
+     module doesn't overclaim — rotation bounds exposure, it does not
+     eliminate the mechanism). Plus `forget_batch` checks (clears
+     history, reports count, no-ops harmlessly on an untracked batch).
+  15 new checks, all passing on the first run after one fix (see below).
+- **`tests/bench.py`**: added a `rotate_batch_salt` timing line next to
+  the existing `replace()` one, informational only. Measured: **~62ms
+  for `rotate_batch_salt` vs ~1883ms for a full recommit at 30 batches
+  (31x)** — statistically the same cost as `replace()`'s own ~62ms,
+  exactly as expected since both are one `_reseal()` call.
+- **`README.md`**: new Security bullet stating what `rotate_batch_salt`
+  does and does not close, directly after the multi-query-correlation
+  bullet; a usage example added to the `QueryGovernor` section pairing
+  `rotate_batch_salt`/`forget_batch`; check count corrected from 109 to
+  124 in two places (the `Tests` section and the `Layout` file listing,
+  the latter of which had been stuck at a stale 98 since before this
+  session's binding/hiding work — caught and fixed here, not a
+  regression introduced by this entry).
+
+### A lesson applied from entry 79, not re-learned the hard way
+
+Entry 79's own test hit a mismatched-`s_mod` bug (`test_modulus.py`/
+`test_query_governance.py`'s pattern of passing `s_mod=ut.generate_
+prime(256)` breaks any argument that depends on `S`'s ring matching
+`mod`). This module's ratio-cancellation math has the exact same
+dependency (`combined = row * S**d mod DEFAULT_MOD` only means what it's
+claimed to mean when `S` actually lives in that ring), so every
+`Commitment` built here deliberately left `s_mod` at its default, with
+an explicit `assert C.s_mod == DEFAULT_MOD` stated as the test's own
+precondition up front — avoided this time by applying entry 79's finding
+directly, not re-discovered by hitting the same failure again.
+
+### Verified
+
+`python3 -m tests`, full run: **124/124 checks**, including all 15 new
+`test_salt_rotation` checks.
+
+### What this does not close
+
+Exactly what the design discussion said it wouldn't: ratio-cancellation
+within a single salt window is untouched, and this remains a policy-
+adjacent mitigation (bounding exposure) paired with `QueryGovernor`
+(refusing the worst-shaped queries within a window), not a proof of
+resistance to a general multi-query adversary. That proof would still
+mean decoupling `c` from `S` and adding a per-query rerandomization
+argument — entry 48's option 3, still not attempted.

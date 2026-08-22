@@ -1555,6 +1555,58 @@ class Commitment:
         self._refresh_root(leaf=b)
         return index
 
+    # --- salt rotation (multi-query mitigation) ----------------------------
+
+    def rotate_batch_salt(self, b, new_salt=None):
+        """Refreshes batch `b`'s blinding grid (S0/S) under a FRESH secret
+        salt -- the operator-side mitigation QueryGovernor's own docstring
+        names but deliberately leaves "out of scope for this class."
+
+        WHY THIS HELPS obs:ratio (the multi-query correlation gap;
+        ms6_vibe.md entries 48/78/79, README's Security section): two
+        proofs issued against this batch cancel S(r,j) via their ratio
+        only because they share the SAME S. Rotating draws a fresh one, so
+        any proof issued AFTER this call shares nothing with any proof
+        issued BEFORE it -- the ratio no longer cancels. This is NOT per
+        query: rotate on whatever cadence an operator chooses (e.g. once
+        QueryGovernor.history_for_batch(b) approaches max_openings_per_
+        batch), and every query served between two rotations is free.
+        It is NOT a new commitment either: same Commitment object, same
+        vals/indices/every-other-batch, same top-level secret `s` -- only
+        this one batch's h/S (and therefore `c`, the seal-tree root)
+        change.
+
+        WHAT THIS DOES NOT DO: it does not stop ratio-cancellation BETWEEN
+        two proofs issued in the SAME window (QueryGovernor's job, still
+        needed), and it does not touch the underlying cause (S reused
+        across queries at all) -- only the WINDOW during which any one S
+        stays exploitable. Mitigation, not proof, exactly like
+        QueryGovernor itself. Pair with governor.forget_batch(b) (if using
+        one) so its history doesn't keep tracking against a now-stale S.
+
+        WHY IT'S CHEAP: only S0 -- and therefore h_list[b]/s_list[b] --
+        is recomputed, via the same _reseal() replace()/delete() already
+        call on every single-item update. perm, h1_salt, hm_list[b], and
+        every item's cntH/cntS contribution are untouched: nothing but
+        _s0() ever reads self.salts[b] (grep the class -- one call site).
+        No item is re-hashed or re-permuted, unlike a full batch rebuild
+        (which WOULD need that, since perm/h1_salt are themselves
+        salt-derived but are deliberately not rotated here -- their job,
+        per _h1_salt's own docstring, is the offline dictionary-guessing
+        gap, not obs:ratio; rotating them would cost re-hashing every
+        item in the batch for no benefit to the gap this method targets).
+
+        new_salt: pin an explicit value (reproducibility in tests); None
+        (the default) draws a fresh one the same way _next_salt does.
+        Returns the new salt.
+        """
+        if not 0 <= b < len(self.h_list):
+            raise IndexError(f"batch {b} outside 0..{len(self.h_list) - 1}")
+        self.salts[b] = new_salt if new_salt is not None else gen.randrange(self.s)
+        self._reseal(b)
+        self._refresh_root(leaf=b)
+        return self.salts[b]
+
     @property
     def live_count(self):
         """Items still in the commitment. len(self.vals) counts tombstoned
@@ -1592,8 +1644,9 @@ class QueryGovernor:
     an opening whose claim set is suspiciously close to one already
     served against the same batch, and cap how many distinct openings a
     batch will ever serve before an operator should rotate that batch's
-    salt (a full reseal, out of scope for this class -- it just tracks
-    when that's due).
+    salt via Commitment.rotate_batch_salt() (the actual reseal is out of
+    scope for this class -- it just tracks when that's due), then clear
+    this governor's own record of it via forget_batch() (below).
 
     WHY min_new_items=3, not 2: the literal obs:ratio construction queries
     claim sets differing by exactly one item (symmetric difference 1) to
@@ -1733,6 +1786,17 @@ class QueryGovernor:
         one batch (local indices) -- e.g. to decide whether a batch is
         approaching its cap and due for salt rotation."""
         return list(self._history.get(batch_index, []))
+
+    def forget_batch(self, batch_index):
+        """Clears a batch's recorded history -- call this AFTER actually
+        rotating that batch's salt (Commitment.rotate_batch_salt), not
+        instead of it. Forgetting history alone changes nothing about S;
+        it only stops this governor comparing FUTURE claim sets against
+        claim sets that were served under a now-replaced S, which would
+        otherwise needlessly refuse legitimate new queries once the real
+        correlation risk they guarded against no longer applies. Returns
+        the number of claim sets forgotten."""
+        return len(self._history.pop(batch_index, []))
 
 
 def ps6_governed(governor, iset, h_list, hm_list, s_list, params, d, workers=DEFAULT_WORKERS, expect=None):

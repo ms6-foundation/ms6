@@ -29,12 +29,13 @@ ms6/                       prover
 vs6/                       verifier — imports nothing from ms6/
   core.py                    vs6() verify
   utils6.py                  the subset of the toolkit a verifier needs
-tests/                     98 checks; exits non-zero on failure
+tests/                     124 checks; exits non-zero on failure
   run_all.py                 runs every module, one combined report
   harness.py                 shared fixtures + the pass/fail reporter
   test_roundtrip.py          commit -> open -> verify, and tamper rejection
   test_updatability.py       append / replace / delete
-  test_modulus.py            default modulus's shape; not baked in
+  test_modulus.py            default modulus's shape; not baked in; the
+                              gcd(d, mod-1) binding guard
   test_sealtree.py           the cached fold tree
   test_params.py             the parameter contract and its enforcement
   test_parity.py             prover/verifier duplicated-copy parity
@@ -42,8 +43,12 @@ tests/                     98 checks; exits non-zero on failure
   test_completeness.py       sweep over the workers>1 batch-routing path
   test_adversarial.py        tamper / forge / equivocation attempts
   test_leak.py               root-extraction leak: decoy content either way
+  test_hiding.py             single-proof hiding lemma (bijection proof +
+                              real-pipeline invertibility check)
   test_query_governance.py   QueryGovernor: refusal, cap, per-batch scoping
-  bench.py                   update cost (informational, never fails)
+  test_salt_rotation.py      rotate_batch_salt: cheap, bounds (not closes)
+                              the multi-query window
+  bench.py                   update/rotation cost (informational, never fails)
 examples/
   payroll_audit_demo.py      HR proves salaries to an auditor
   sanctions_screening_scale_demo.py   120k-record registry, bank checks 2
@@ -217,6 +222,17 @@ should reseal that batch under a fresh salt. This is a policy control,
 not a proof — see [Security](#security) for what it does and does not
 close.
 
+The reseal itself is `Commitment.rotate_batch_salt()`:
+
+```python
+if len(gov.history_for_batch(0)) >= 8:      # approaching the cap
+    C.rotate_batch_salt(0)                   # fresh S for batch 0 only; changes c
+    gov.forget_batch(0)                      # stop tracking against the old S
+```
+
+Cheap (one `_reseal()`, no item is re-hashed) and not a new commitment —
+see [Security](#security) for exactly what it does and does not close.
+
 ## Security
 
 Honest limitations, since this is a prototype:
@@ -341,6 +357,26 @@ Honest limitations, since this is a prototype:
   the genuinely open item — the single-proof hiding lemma above says nothing
   about it: reusing the same `S(r,j)` across two proofs is precisely what
   the lemma requires *not* happening.
+- **`Commitment.rotate_batch_salt(b)` bounds the window, it does not close
+  the gap.** Draws a fresh salt for one batch and reseals only that
+  batch's `S0`/`h`/`S` (`tests/test_salt_rotation.py` demonstrates both
+  halves directly: the ratio attack still fully works on two proofs from
+  the *same* salt window, before or after any given rotation — this
+  changes nothing about the underlying mechanism — but *fails* across a
+  rotation boundary, since a pre- and post-rotation proof no longer share
+  an `S` to cancel). Not a new commitment: same `vals`, indices, `perm`,
+  `h1_salt`, and every other batch are untouched — only `c` changes, the
+  same way it already does after any `replace()`/`delete()`. Not per
+  query either: rotate on whatever cadence an operator chooses (e.g. once
+  `QueryGovernor.history_for_batch(b)` nears `max_openings_per_batch`,
+  then call `governor.forget_batch(b)` so it stops tracking against a now
+  -stale `S`); every query served inside one window costs nothing extra.
+  Cheap because only `_reseal()`'s existing work runs — the same single
+  step `replace()` already pays on every item update, not a re-hash of
+  the batch's items (`perm`/`h1_salt` are salt-derived too but are
+  deliberately left alone, since re-deriving them would need exactly
+  that). Pair with `QueryGovernor` for defense in depth; neither is a
+  proof of resistance to a general multi-query adversary on its own.
 
 `ms6_vibe.md` records what each mechanism defends against and what it does
 not, including several attempts that were tried and reverted.
@@ -352,7 +388,7 @@ python3 -m tests                 # everything, one combined report
 python3 -m tests.test_parity     # one group on its own
 ```
 
-109 checks covering the round trip, updatability (append/replace/delete), the
+124 checks covering the round trip, updatability (append/replace/delete), the
 cached fold tree, the parameter contract and its enforcement (including the
 `gcd(d, mod-1)` binding guard's commit/prove/verify-time enforcement and its
 composite-modulus exemption), modulus sizing and modulus-independence,
@@ -363,10 +399,12 @@ adversarial suite (tampered values, wrong-index substitution, fabricated
 values, cross-batch swaps, iset/proof mismatch, and hm equivocation at both
 claimed and unclaimed positions), the root-extraction leak (confirming what's
 recovered is decoy under the shipped default prime, a fresh unrelated prime,
-and the legacy composite alike, not just that extraction fails), and
-`QueryGovernor`'s refusal/cap/per-batch-
-scoping behavior. Exits non-zero on failure with the failing checks named,
-so it works as a CI gate.
+and the legacy composite alike, not just that extraction fails),
+`QueryGovernor`'s refusal/cap/per-batch-scoping behavior, and
+`rotate_batch_salt`'s own claims (only `S0`/`h`/`S` change, everything else
+is untouched; the ratio attack still works within a window and fails across
+a rotation boundary — both shown directly, not just asserted). Exits
+non-zero on failure with the failing checks named, so it works as a CI gate.
 
 The parity module is the one worth keeping: it compares the duplicated prover
 and verifier copies output-for-output, and is the only check that catches
